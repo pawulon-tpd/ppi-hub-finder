@@ -1,7 +1,8 @@
 # ppi-hub-finder
 
-Give it a list of proteins. It finds **which single protein, inside or outside your list,
-directly interacts with the most of them**, and draws the interaction map.
+Give it a list of proteins. It finds **which protein, inside or outside your list,
+interacts with the most of them** (directly or through one intermediate), picks the best
+combination of N different targets, and draws the interaction map.
 
 Data comes from two public databases:
 
@@ -12,68 +13,123 @@ Data comes from two public databases:
 
 ## Install
 
+Needs Python 3.9+.
+
 ```bash
 git clone https://github.com/pawulon-tpd/ppi-hub-finder.git
 cd ppi-hub-finder
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-For BioGRID, register at <https://webservice.thebiogrid.org/> and:
+STRING needs no key. For BioGRID, register for a free key at
+<https://webservice.thebiogrid.org/> and save it in `.env` (git-ignored):
+
 ```bash
-export BIOGRID_ACCESS_KEY=your_key
+echo 'BIOGRID_ACCESS_KEY=your_key_here' > .env
 ```
 
-## Usage
+## Quick start
+
+In every new terminal:
 
 ```bash
-# STRING, physical network, high confidence (default)
-python ppi_hubs.py TP53 MDM2 BAX BCL2 EGFR KRAS BRAF
+cd ppi-hub-finder && source .venv/bin/activate
+set -a; . ./.env; set +a      # only needed for BioGRID
+```
 
-# Names from a file, both databases, require experimental evidence in STRING
-python ppi_hubs.py -f examples/genes_example.txt --source both --min-escore 0.4
+```bash
+# A few genes typed directly (STRING only)
+python ppi_hubs.py TP53 MDM2 BAX BCL2 EGFR KRAS
 
-# Ignore chaperones / ubiquitin / 14-3-3, and also PRKN
-python ppi_hubs.py -f examples/genes_example.txt --source both --exclude-hubs PRKN
+# Genes from a file (spaces, commas or new lines; # starts a comment)
+python ppi_hubs.py -f examples/genes_example.txt
 
-# Only look at links between proteins in your own list
-python ppi_hubs.py -f examples/genes_example.txt --only-within
+# Recommended everyday run: both databases, sticky hubs removed
+python ppi_hubs.py -f examples/genes_example.txt --source both --exclude-hubs
 
-# Also count proteins reached through one intermediate; best pair, all combinations tested
-python ppi_hubs.py -f examples/genes_example.txt --depth 2 --cover 2 --exact
+# Full analysis: also count proteins reached via one intermediate, test every pair of targets
+python ppi_hubs.py -f examples/genes_example.txt --source both --exclude-hubs --depth 2 --cover 2 --exact
 
 # Mouse
 python ppi_hubs.py Trp53 Mdm2 Bax --species 10090
 ```
 
 Inputs can be gene symbols, UniProt accessions or Ensembl IDs. STRING converts them
-to canonical gene names, which BioGRID then uses too.
+to current gene names, which BioGRID then uses too.
 
-Main options:
+Tip: use `--out results/some_name` for each run so earlier results are not overwritten.
+
+## Options (`python ppi_hubs.py -h`)
+
+**Input**
+
+| Option | Meaning | Default |
+|---|---|---|
+| `proteins` | Gene names, UniProt or Ensembl IDs | – |
+| `-f FILE` | Read names from a file | – |
+| `--species` | NCBI taxon id: 9606 human, 10090 mouse, 10116 rat, 4932 yeast | 9606 |
+| `--biogrid-taxid` | BioGRID taxon id if it differs (yeast: 559292) | same as `--species` |
+
+**Databases and evidence**
+
+| Option | Meaning | Default |
+|---|---|---|
+| `--source` | `string`, `biogrid` or `both` | string |
+| `--score` | STRING confidence 0–1000 (400 medium, 700 high, 900 highest) | 700 |
+| `--network-type` | `physical` = binding/complex; `functional` = any association | physical |
+| `--min-escore` | Keep STRING links with experimental score ≥ this (0–1), e.g. 0.4 | 0 (off) |
+| `--limit` | Max STRING partners per protein | 1000 |
+| `--min-pubs` | BioGRID pair must be reported in ≥ N papers (1 also keeps single high-throughput screens, which tend to flood the ranking) | 2 |
+| `--all-biogrid` | Also keep BioGRID genetic (non-binding) interactions | off |
+| `--biogrid-key` | BioGRID key, if not set in the environment | `BIOGRID_ACCESS_KEY` |
+
+**Filtering**
 
 | Option | Meaning |
 |---|---|
-| `--source string\|biogrid\|both` | Which database(s) to use |
-| `--score 700` | STRING combined score cut-off (400 medium, 700 high, 900 highest) |
-| `--network-type physical` | `physical` = binding/complex; `functional` = any association |
-| `--min-escore 0.4` | Keep STRING edges only with experimental support |
-| `--min-pubs 2` | BioGRID pair must be reported in ≥ N papers (default 2; 1 also keeps single high-throughput screens, which tend to flood the ranking) |
-| `--exclude-hubs [NAMES]` | Drop sticky proteins (HSP90/HSP70 chaperones, ubiquitin, 14-3-3) from the network, plus any names you add. Your own input proteins are never dropped |
-| `--only-within` | Ignore partners outside your list |
-| `--depth 2` | Also count inputs reached through one intermediate protein |
-| `--hop-weight 0.5` | Value of a 2-hop link relative to a direct link |
-| `--max-shell 300` | Depth 2: how many first-shell partners are expanded |
-| `--cover 3` | Combine 3 different targets that together reach the most of your list |
-| `--exact` | Test every combination (among `--candidates` best singles) instead of greedy |
+| `--exclude-hubs` | Drop sticky proteins from the network (list below). Your own input proteins are never dropped |
+| `--exclude-hubs VCP SQSTM1` | The same, plus the names you add |
+| `--only-within` | Only links between your own proteins; ignore all others |
 
-## Outputs (`results/`)
+Proteins removed by `--exclude-hubs` (human gene names, matched case-insensitively):
+
+- **Chaperones:** HSP90AA1, HSP90AB1, HSP90B1, HSPA1A, HSPA1B, HSPA4, HSPA5, HSPA8, HSPA9, HSPD1, CDC37, STUB1
+- **Ubiquitin:** UBB, UBC, UBA52, RPS27A
+- **14-3-3:** YWHAB, YWHAE, YWHAG, YWHAH, YWHAQ, YWHAZ, SFN
+
+Some of their links are real biology (HSP90 stabilises EGFR, AKT1 and BRAF; 14-3-3 regulates RAF1),
+so compare runs with and without the flag.
+
+**Search**
+
+| Option | Meaning | Default |
+|---|---|---|
+| `--depth 2` | Also count inputs reached through one intermediate protein | 1 |
+| `--hop-weight` | Value of a 2-hop link relative to a direct one | 0.5 |
+| `--max-shell` | Depth 2: how many direct partners are explored further | 300 |
+| `--cover N` | Find the best combination of N different targets | 3 |
+| `--exact` | Test every combination (among `--candidates` best singles) instead of greedy | off |
+| `--candidates` | `--exact`: how many top single targets to combine | 60 |
+
+**Output**
+
+| Option | Meaning | Default |
+|---|---|---|
+| `--out DIR` | Output folder | `results` |
+| `--top N` | Rows printed on screen | 10 |
+| `--max-external` | Max outside proteins drawn on the map | 25 |
+
+## Outputs
 
 | File | Content |
 |---|---|
-| `target_ranking.csv` | Every protein ranked by direct links to your list: `n_input_partners`, `coverage_pct` (links + itself if in the list), and the names |
+| `target_ranking.csv` | Every protein ranked by how much of your list it reaches: `n_input_partners`, `n_two_hop`, `score`, `coverage_pct` and the names |
 | `cover.csv` | Best combination of N different targets and what each one adds |
 | `input_partner_counts.csv` | Number of interaction partners of each input protein, per database |
 | `edges.csv` | All interactions with evidence scores |
-| `network.png` | Static map: blue circles = your proteins, orange diamonds = outside proteins linking ≥2 of them, red = best target and its links, thick grey = found in both databases |
+| `network.png` | Static map: blue circles = your proteins, orange diamonds = outside proteins linking ≥2 of them, red = best target and its links (dashed = 2-hop paths), thick grey = found in both databases |
 | `network.html` | Interactive version (drag, zoom, hover for details) |
 
 ## How the ranking works

@@ -13,7 +13,7 @@ Data comes from two public databases:
 ## Install
 
 ```bash
-git clone https://github.com/<you>/ppi-hub-finder.git
+git clone https://github.com/pawulon-tpd/ppi-hub-finder.git
 cd ppi-hub-finder
 pip install -r requirements.txt
 ```

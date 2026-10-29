@@ -6,6 +6,23 @@ import networkx as nx
 import pandas as pd
 
 
+# Sticky proteins that bind almost everything (chaperones, ubiquitin, 14-3-3) and
+# dominate any "who binds most of my list" ranking. Used by --exclude-hubs.
+PROMISCUOUS = {
+    "HSP90AA1", "HSP90AB1", "HSP90B1", "HSPA1A", "HSPA1B", "HSPA4", "HSPA5", "HSPA8",
+    "HSPA9", "HSPD1", "CDC37", "STUB1",
+    "UBC", "UBB", "UBA52", "RPS27A",
+    "YWHAB", "YWHAE", "YWHAG", "YWHAH", "YWHAQ", "YWHAZ", "SFN",
+}
+
+
+def drop_proteins(edges, names, keep=()):
+    """Remove edges touching any protein in `names` (case-insensitive), except those in `keep`."""
+    keep_up = {k.upper() for k in keep}
+    drop = {n.upper() for n in names} - keep_up
+    return [e for e in edges if e["a"].upper() not in drop and e["b"].upper() not in drop]
+
+
 def _fixer(canon):
     canon = canon or {}
     return lambda n: canon.get(n.upper(), n)

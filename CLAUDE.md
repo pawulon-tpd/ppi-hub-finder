@@ -15,8 +15,12 @@ and tested.
   Field names correct, paging needed and works (~24k records for the example).
   BioGRID keeps some outdated symbols (PARK2 vs STRING's PRKN): `biogrid_api._namer`
   maps them onto STRING names via `SYNONYMS_A/B` (only if exactly one synonym matches).
-- Without `--min-pubs 2`, BioGRID high-throughput screens dominate the ranking
-  (PRKN, TRIM67, NUDT21 on top); with it, results look like STRING-only.
+- `--min-pubs` defaults to 2: with 1, BioGRID high-throughput screens dominate the ranking
+  (PRKN, TRIM67, NUDT21 on top).
+- `--exclude-hubs [NAMES]` drops `network.PROMISCUOUS` (chaperones, ubiquitin, 14-3-3)
+  plus extra names from the edges (never inputs), so they are neither targets nor bridges.
+- Depth 2 + BioGRID asks only for links among inputs + shell (`includeInteractors=false`,
+  one request): ~50 s for the example. Fetching all shell partners took >10 min.
 - Tests: `pytest` (config in `pyproject.toml` puts the repo root on `sys.path`).
 
 ## Layout
@@ -53,7 +57,7 @@ and tested.
    pyvis tooltips (`\n` may render literally, in which case switch to `<br>`).
 
 ## Ideas / possible next steps
-- Option to exclude promiscuous hubs (UBC, HSP90AA1, ...) or penalise by total degree.
+- Penalise hubs by total degree instead of (or besides) the fixed `--exclude-hubs` list.
 - Cache API responses (e.g. `requests-cache`) to avoid re-fetching.
 - Edge-confidence-weighted paths at depth 2 (product of scores).
 - Add structural evidence (PDBe/RCSB complexes) as a third source.

@@ -78,3 +78,9 @@ def test_biogrid_synonyms(monkeypatch):
     edges = biogrid_api.interactions(["PTEN", "TP53"], "key", known_names={"PTEN", "TP53", "PRKN", "AR"})
     assert {frozenset((e["a"], e["b"])) for e in edges} == {
         frozenset(("PTEN", "PRKN")), frozenset(("TP53", "PRKN")), frozenset(("TP53", "XYZ1"))}
+
+
+def test_drop_proteins():
+    edges = [E("HSP90AA1", "A"), E("hsp90aa1", "B"), E("X", "A"), E("YWHAZ", "C")]
+    out = network.drop_proteins(edges, network.PROMISCUOUS | {"X"}, keep=["YWHAZ"])
+    assert out == [E("YWHAZ", "C")]

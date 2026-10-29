@@ -32,6 +32,9 @@ python ppi_hubs.py TP53 MDM2 BAX BCL2 EGFR KRAS BRAF
 # Names from a file, both databases, require experimental evidence in STRING
 python ppi_hubs.py -f examples/genes_example.txt --source both --min-escore 0.4
 
+# Ignore chaperones / ubiquitin / 14-3-3, and also PRKN
+python ppi_hubs.py -f examples/genes_example.txt --source both --exclude-hubs PRKN
+
 # Only look at links between proteins in your own list
 python ppi_hubs.py -f examples/genes_example.txt --only-within
 
@@ -53,7 +56,8 @@ Main options:
 | `--score 700` | STRING combined score cut-off (400 medium, 700 high, 900 highest) |
 | `--network-type physical` | `physical` = binding/complex; `functional` = any association |
 | `--min-escore 0.4` | Keep STRING edges only with experimental support |
-| `--min-pubs 2` | BioGRID pair must be reported in ≥ N papers |
+| `--min-pubs 2` | BioGRID pair must be reported in ≥ N papers (default 2; 1 also keeps single high-throughput screens, which tend to flood the ranking) |
+| `--exclude-hubs [NAMES]` | Drop sticky proteins (HSP90/HSP70 chaperones, ubiquitin, 14-3-3) from the network, plus any names you add. Your own input proteins are never dropped |
 | `--only-within` | Ignore partners outside your list |
 | `--depth 2` | Also count inputs reached through one intermediate protein |
 | `--hop-weight 0.5` | Value of a 2-hop link relative to a direct link |

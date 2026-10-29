@@ -30,8 +30,13 @@ def parse():
                    help="STRING min experimental-channel score 0-1, e.g. 0.4 [0 = off]")
     p.add_argument("--limit", type=int, default=1000, help="STRING max partners per protein [1000]")
     p.add_argument("--biogrid-key", help="BioGRID access key (or env BIOGRID_ACCESS_KEY)")
-    p.add_argument("--min-pubs", type=int, default=1, help="BioGRID min publications per pair [1]")
+    p.add_argument("--min-pubs", type=int, default=2,
+                   help="BioGRID min publications per pair; 1 also keeps single high-throughput "
+                        "screens [2]")
     p.add_argument("--all-biogrid", action="store_true", help="also keep BioGRID genetic interactions")
+    p.add_argument("--exclude-hubs", nargs="*", metavar="NAME",
+                   help="drop sticky proteins (chaperones, ubiquitin, 14-3-3) from the network; "
+                        "extra names are added to that list. Your input proteins are never dropped")
     p.add_argument("--only-within", action="store_true",
                    help="ignore partners outside your list (only rank your own proteins)")
     p.add_argument("--depth", type=int, choices=[1, 2], default=1,
@@ -103,12 +108,20 @@ def main():
                     inputs.append(n)
     canon = {n.upper(): n for n in inputs}
     inp = set(inputs)
+    excluded = set()
+    if args.exclude_hubs is not None:
+        excluded = network.PROMISCUOUS | {n.upper() for n in args.exclude_hubs}
+        kept = sorted(n for n in inputs if n.upper() in excluded)
+        if kept:
+            print(f"  not excluded because they are in your list: {', '.join(kept)}")
 
     # 2. Direct partners of the inputs
     print("Fetching interaction partners...")
     edges = fetch(args, use_string, use_biogrid, key, string_ids, inputs,
                   include_interactors=not args.only_within)
     edges = network.dedupe_edges(edges, canon)
+    if excluded:
+        edges = network.drop_proteins(edges, excluded, keep=inp)
     if args.only_within:
         edges = [e for e in edges if e["a"] in inp and e["b"] in inp]
     if not edges:
@@ -126,9 +139,11 @@ def main():
             if e["source"] == "STRING":
                 id_of[e["a"]], id_of[e["b"]] = e["id_a"], e["id_b"]
         new = fetch(args, use_string, use_biogrid, key,
-                    [id_of[n] for n in shell if n in id_of], shell, include_interactors=True)
+                    [id_of[n] for n in shell if n in id_of], inputs + shell,
+                    include_interactors=False)
         keep = inp | set(shell)
         new = [e for e in network.dedupe_edges(new, canon) if e["a"] in keep and e["b"] in keep]
+        new = network.drop_proteins(new, excluded, keep=inp)
         edges = network.dedupe_edges(edges + new)
 
     # 4. Analyse

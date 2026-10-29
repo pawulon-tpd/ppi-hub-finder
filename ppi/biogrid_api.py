@@ -27,12 +27,14 @@ def fetch_raw(genes, access_key, tax_id=9606, include_interactors=True):
     """Raw BioGRID records involving the given gene symbols, deduplicated by interaction id.
 
     include_interactors=True  -> interactions with ANY partner (partner may be outside the list)
-    include_interactors=False -> only interactions among the listed genes
+    include_interactors=False -> only interactions among the listed genes (sent as one
+                                 request, since chunking would miss pairs across chunks)
     """
     records = {}
     genes = list(genes)
-    for i in range(0, len(genes), 100):
-        chunk = genes[i:i + 100]
+    size = 100 if include_interactors else max(len(genes), 1)
+    for i in range(0, len(genes), size):
+        chunk = genes[i:i + size]
         start = 0
         while True:
             params = {

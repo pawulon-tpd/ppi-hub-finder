@@ -62,3 +62,19 @@ def test_plots(tmp_path):
     plot.draw_png(H, r, tmp_path / "n.png", best, paths)
     plot.draw_html(H, r, tmp_path / "n.html", best, paths)
     assert (tmp_path / "n.png").stat().st_size > 0 and (tmp_path / "n.html").stat().st_size > 0
+
+
+def test_biogrid_synonyms(monkeypatch):
+    from ppi import biogrid_api
+
+    def rec(i, a, b, syn_b="", pub=1):
+        return {"BIOGRID_INTERACTION_ID": i, "OFFICIAL_SYMBOL_A": a, "OFFICIAL_SYMBOL_B": b,
+                "SYNONYMS_A": "", "SYNONYMS_B": syn_b, "EXPERIMENTAL_SYSTEM_TYPE": "physical",
+                "EXPERIMENTAL_SYSTEM": "Two-hybrid", "PUBMED_ID": pub}
+    raw = [rec(1, "PTEN", "PARK2", "AR-JP|PRKN"),       # old symbol -> PRKN
+           rec(2, "TP53", "PRKN", pub=2),
+           rec(3, "TP53", "XYZ1", "AR|PRKN")]          # ambiguous -> unchanged
+    monkeypatch.setattr(biogrid_api, "fetch_raw", lambda *a, **k: raw)
+    edges = biogrid_api.interactions(["PTEN", "TP53"], "key", known_names={"PTEN", "TP53", "PRKN", "AR"})
+    assert {frozenset((e["a"], e["b"])) for e in edges} == {
+        frozenset(("PTEN", "PRKN")), frozenset(("TP53", "PRKN")), frozenset(("TP53", "XYZ1"))}

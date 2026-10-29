@@ -64,10 +64,11 @@ def fetch(args, use_string, use_biogrid, key, string_ids, genes, include_interac
         edges += string_api.interaction_partners(
             string_ids, args.species, args.score, args.network_type, args.limit, args.min_escore)
     if use_biogrid and genes:
+        known = set(genes) | {n for e in edges for n in (e["a"], e["b"])}
         edges += biogrid_api.interactions(
             genes, key, args.biogrid_taxid or args.species,
             physical_only=not args.all_biogrid, min_publications=args.min_pubs,
-            include_interactors=include_interactors)
+            include_interactors=include_interactors, known_names=known)
     return edges
 
 

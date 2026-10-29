@@ -11,7 +11,12 @@ and tested.
 - Written in a claude.ai chat sandbox without network access, then moved here.
 - 2026-10-29: first live STRING run works (depth 1 and depth 2 + `--exact`, ~15 s for
   the 14-gene example). `get_string_ids` echoes `queryItem`, `score` is 0-1 as assumed.
-- **BioGRID live calls still untested** (needs `BIOGRID_ACCESS_KEY`).
+- BioGRID live run works too (key in gitignored `.env`; `set -a; . ./.env; set +a`).
+  Field names correct, paging needed and works (~24k records for the example).
+  BioGRID keeps some outdated symbols (PARK2 vs STRING's PRKN): `biogrid_api._namer`
+  maps them onto STRING names via `SYNONYMS_A/B` (only if exactly one synonym matches).
+- Without `--min-pubs 2`, BioGRID high-throughput screens dominate the ranking
+  (PRKN, TRIM67, NUDT21 on top); with it, results look like STRING-only.
 - Tests: `pytest` (config in `pyproject.toml` puts the repo root on `sys.path`).
 
 ## Layout
@@ -36,7 +41,8 @@ and tested.
   by several targets counts once at its best distance (weighted max coverage).
 - Depth 2 only expands the top `--max-shell` (300) first-shell partners, so targets are
   limited to inputs + first shell. Second-shell targets are deliberately not considered (cost).
-- STRING names are canonical; BioGRID names are mapped case-insensitively onto them.
+- STRING names are canonical; BioGRID names are mapped case-insensitively onto them,
+  falling back to BioGRID synonyms for outdated symbols.
 
 ## Things to verify on first live run
 1. `python ppi_hubs.py -f examples/genes_example.txt`: does `get_string_ids` with

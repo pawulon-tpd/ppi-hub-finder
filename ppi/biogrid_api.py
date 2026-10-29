@@ -55,17 +55,37 @@ def fetch_raw(genes, access_key, tax_id=9606, include_interactors=True):
     return list(records.values())
 
 
+def _namer(known_names):
+    """Map a BioGRID symbol onto a known (e.g. STRING) name.
+
+    BioGRID sometimes keeps an older symbol (PARK2) where STRING uses the current one (PRKN).
+    If the official symbol is unknown but exactly one of its synonyms is known, use that.
+    """
+    known = {n.upper(): n for n in known_names or ()}
+
+    def name(symbol, synonyms):
+        if not known or symbol.upper() in known:
+            return known.get(symbol.upper(), symbol)
+        hits = {known[s.upper()] for s in (synonyms or "").split("|") if s.upper() in known}
+        return hits.pop() if len(hits) == 1 else symbol
+    return name
+
+
 def interactions(genes, access_key, tax_id=9606, physical_only=True,
-                 min_publications=1, include_interactors=True):
+                 min_publications=1, include_interactors=True, known_names=None):
     """Collapse BioGRID records into one edge per protein pair.
 
     weight = number of distinct publications supporting the pair.
+    known_names: names already used elsewhere (STRING); outdated BioGRID symbols are
+    mapped onto them through BioGRID's synonym lists.
     """
+    name = _namer(known_names)
     pairs = defaultdict(lambda: {"systems": set(), "pubs": set(), "n": 0})
     for rec in fetch_raw(genes, access_key, tax_id, include_interactors):
         if physical_only and rec.get("EXPERIMENTAL_SYSTEM_TYPE") != "physical":
             continue
-        a, b = rec["OFFICIAL_SYMBOL_A"], rec["OFFICIAL_SYMBOL_B"]
+        a = name(rec["OFFICIAL_SYMBOL_A"], rec.get("SYNONYMS_A"))
+        b = name(rec["OFFICIAL_SYMBOL_B"], rec.get("SYNONYMS_B"))
         if a == b:
             continue
         p = pairs[tuple(sorted((a, b)))]

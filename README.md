@@ -125,6 +125,7 @@ so compare runs with and without the flag.
 | `--hop-weight` | Value of a 2-hop link relative to a direct one | 0.5 |
 | `--max-shell` | Depth 2: how many direct partners are explored further | 300 |
 | `--cover N` | Find the best combination of N different targets | 3 |
+| `--pairs N` | Also print the N best target **pairs**, each protein used at most once (always on; saved to `top_pairs.csv`) | 3 |
 | `--exact` | Test every combination (among `--candidates` best singles) instead of greedy | off |
 | `--candidates` | `--exact`: how many top single targets to combine | 60 |
 
@@ -144,7 +145,7 @@ so compare runs with and without the flag.
 |---|---|---|
 | `--structures` | Look up PDB entries and bound ligands for the top targets and the best pairs | off |
 | `--struct-targets` | How many top targets to look up | 10 |
-| `--pairs` | How many best target pairs to report | 3 |
+| `--pairs` | How many best target pairs to report (also printed without `--structures`) | 3 |
 | `--ternary` | For each pair with a ligand on both sides: ligand burial, exit vectors, clash-free pose scan | off |
 | `--ternary-vectors` | Exit vectors per ligand to try | 3 |
 | `--ternary-poses` | Distinct arrangements written as PDB files per pair | 5 |
@@ -176,7 +177,7 @@ so compare runs with and without the flag.
 
 | File | Content |
 |---|---|
-| `top_pairs.csv` | The best `--pairs` target pairs by combined coverage (each protein appears in at most one pair) |
+| `top_pairs.csv` | The best `--pairs` target pairs by combined coverage, each protein used at most once (written on every run, with or without `--structures`) |
 | `structures.csv` | Per protein: number of PDB entries, how many have a real ligand, best resolution, best ligand-bound entry, distinct ligands |
 | `ligands.csv` | Every non-additive ligand found, with its PDB entry, chain, weight, resolution and name |
 | `pair_structures.csv` | Per pair: the best ligand-bound entry on each side, and any entry containing **both** proteins |
@@ -300,6 +301,9 @@ Read that honestly:
 
 ## Caveats
 
+- BioGRID requests are chunked and retried, so long lists no longer time out, but they
+  are still slow the first time: 24 proteins with `--source both` take about 25 s, or
+  90 s with `--depth 2`.
 - STRING's score is not pure experiment. Use `--min-escore` or BioGRID for "proven binding".
 - High-throughput screens make well-studied proteins look like hubs (study bias). Check
   `n_publications` / `systems` in `edges.csv`.

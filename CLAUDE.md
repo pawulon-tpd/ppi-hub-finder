@@ -87,6 +87,10 @@ keep saying so in docs and output. Improving this means a real scoring function
   (VHL, CRBN, MDM2, XIAP, DCAF15...) with known ligand-bound PDBs would answer "which of my
   proteins is PROTAC-tractable, and with which E3" - Pawel raised this, not yet decided.
 - First `--structures` run on ~20 proteins fetches ~2000 PDB entries (~6 min); cached after.
+- BioGRID used to time out above ~10 proteins: partner pulls now go out in chunks of 10,
+  within-shell pulls in chunks of 150 PLUS every chunk pair (else cross-chunk pairs are
+  lost), PAGE 5000, and `_get` retries with a longer timeout each round. 24 proteins:
+  25 s at depth 1, 90 s at depth 2 (`examples/genes_24.txt`).
 - Overview in network.html gets dense with many inputs; per-target views are the readable part.
 
 ## Ideas / possible next steps

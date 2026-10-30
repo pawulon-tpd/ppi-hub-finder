@@ -101,3 +101,23 @@ def test_direct_partner_without_mechanism_uses_bridge():
     rows = M.target_paths(G, idx, "AKT1", table)
     assert [(r["via"], r["effect_on_input"]) for r in rows] == [("", M.NO_DATA), ("MDM2", "inhibits")]
     assert M.summarize(rows)[0] == {"TP53": "inhibits"}
+
+
+def test_commercial_licence_filter():
+    purposes = {"SIGNOR": "commercial", "PhosphoSite": "academic",
+                "HPRD": "academic", "CollecTRI": "composite"}
+    assert M.commercial_ok("SIGNOR;PhosphoSite", purposes)        # one permissive source is enough
+    assert M.commercial_ok("PhosphoSite_MIMP;SIGNOR_ProtMapper", purposes)
+    assert not M.commercial_ok("PhosphoSite;HPRD", purposes)
+    assert not M.commercial_ok("CollecTRI", purposes)             # composite cannot carry it
+    assert not M.commercial_ok("NeverHeardOf", purposes)          # unlisted: cannot verify
+    assert not M.commercial_ok("", purposes)
+
+    i = inter([("A", "B", True, False, "post_translational", "SIGNOR"),
+               ("B", "C", True, False, "post_translational", "PhosphoSite")])
+    e = enz([("A", "B", "phosphorylation", "S1", "PhosphoSite")])
+    full = M.build_index(i, e, ["A", "B", "C"])
+    comm = M.build_index(i, e, ["A", "B", "C"], purposes=purposes)
+    assert set(full) == {("A", "B"), ("B", "C")}
+    assert set(comm) == {("A", "B")}                    # B->C had only an academic source
+    assert comm[("A", "B")]["kinds"] == [M.OTHER]       # its academic phospho site is gone

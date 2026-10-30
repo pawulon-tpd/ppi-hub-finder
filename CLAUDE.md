@@ -81,6 +81,14 @@ sampling reaches the native pose (5.4 A) but scoring by clashes+contacts does NO
 keep saying so in docs and output. Improving this means a real scoring function
 (shape complementarity / desolvation / statistical potential), not more sampling.
 
+## OmniPath licences
+The server's `license=academic|commercial` parameter is ACCEPTED BUT IGNORED (verified
+2026-10-30: identical row counts and PhosphoSite present in both). Filtering is therefore
+done client-side in `mechanisms.commercial_ok` using `/resources` metadata (cached as
+omnipath_resources.json): a record survives only if some source resource has
+purpose == "commercial". Composite aggregators (CollecTRI, DoRothEA) and unlisted
+resources do not count. Keeps ~92% of mechanisms on the 24-gene example.
+
 ## Open questions
 - Real-world target lists not tested yet (only the 14-gene example).
 - No E3-ligase mode yet: `--structures` ranks whatever is in the list. A built-in E3 table

@@ -136,7 +136,7 @@ so compare runs with and without the flag.
 | `--mechanism` | Annotate how proteins act on each other; adds `paths.csv`, `target_effects.csv`, `mechanisms.csv` and colours the interactive map | off |
 | `--mech-targets` | How many top targets get a path analysis and their own view in `network.html` | 20 |
 | `--include-predicted` | Also keep records supported only by text mining or kinase-substrate prediction | off |
-| `--omnipath-license` | `academic` or `commercial`: which OmniPath records you may use | academic |
+| `--omnipath-license` | `commercial` keeps only records that a commercially-licensed resource supports (see Licences) | academic |
 | `--refresh-omnipath` | Re-download the cached OmniPath tables (done automatically after 30 days) | off |
 
 **Structures (RCSB PDB)**
@@ -313,10 +313,33 @@ Read that honestly:
 
 ## Data licences
 
-RCSB PDB data is in the public domain (CC0); UniProt is CC BY 4.0.
-STRING: CC BY 4.0. BioGRID: MIT. OmniPath: each record keeps the licence of its original
-resource; `--omnipath-license commercial` keeps only records allowed for commercial use.
+STRING: CC BY 4.0. BioGRID: MIT. RCSB PDB: public domain (CC0). UniProt: CC BY 4.0.
 Please cite them if you publish results.
+
+**OmniPath needs care.** It aggregates ~230 resources and each record keeps the licence of
+the resource it came from. Of the resources behind the data this tool downloads, 48 allow
+commercial use, 20 are academic/non-profit only, and the rest are composite aggregators or
+are not listed with a licence at all. Several of the largest are **non-commercial**:
+
+| Resource | Licence |
+|---|---|
+| PhosphoSitePlus | CC BY-NC-SA 3.0 |
+| HPRD | academic only |
+| phospho.ELM, ELM | academic only |
+| KEA, HINT | unspecified NC-SA |
+| iPTMnet, Wang, DEPOD, Cellinker | CC BY-NC(-SA) |
+
+`--omnipath-license commercial` drops every record that no commercially-licensed resource
+supports (on the 24-protein example it keeps 92% of the mechanisms). Two warnings:
+
+- **The filter runs here, not on the server.** OmniPath's web service accepts a `license`
+  parameter but, when tested, returned identical data for `academic` and `commercial` —
+  PhosphoSitePlus records came back under both. So this tool applies the filter itself,
+  using OmniPath's own per-resource licence metadata. Do not rely on the server parameter.
+- **This is not legal advice.** The filter is conservative (a record is kept only if a
+  resource explicitly marked `commercial` supports it), but licences change and composite
+  resources are hard to attribute. For commercial work, check the licences of the
+  resources you actually rely on — `mechanisms.csv` lists them per record.
 
 ## Tests
 

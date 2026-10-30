@@ -57,7 +57,9 @@ def parse():
     p.add_argument("--include-predicted", action="store_true",
                    help="--mechanism: also keep text-mined / predicted-only OmniPath records")
     p.add_argument("--omnipath-license", choices=["academic", "commercial"], default="academic",
-                   help="OmniPath records allowed for this use [academic]")
+                   help="'commercial' drops records that only non-commercial resources "
+                        "support (PhosphoSitePlus, HPRD, phospho.ELM, ...). Filtered here, "
+                        "not by the server [academic]")
     p.add_argument("--refresh-omnipath", action="store_true",
                    help="re-download the cached OmniPath tables (auto after 30 days)")
     p.add_argument("--structures", action="store_true",
@@ -232,9 +234,13 @@ def main():
     if args.mechanism:
         if args.species in mechanisms.SPECIES:
             print("Annotating mechanisms (OmniPath)...")
-            inter, enz = mechanisms.load_tables(args.species, args.omnipath_license,
-                                                args.refresh_omnipath)
-            index = mechanisms.build_index(inter, enz, G.nodes, args.include_predicted)
+            inter, enz = mechanisms.load_tables(args.species, refresh=args.refresh_omnipath)
+            purposes = None
+            if args.omnipath_license == "commercial":
+                purposes = mechanisms.resource_purposes(args.refresh_omnipath)
+                print("  keeping only records from resources that allow commercial use")
+            index = mechanisms.build_index(inter, enz, G.nodes, args.include_predicted,
+                                           purposes)
             mechanisms.index_table(index, G).to_csv(out / "mechanisms.csv", index=False)
             saved.append("mechanisms.csv")
         else:

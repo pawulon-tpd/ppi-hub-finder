@@ -8,6 +8,7 @@ KEGG, Reactome, CollecTRI, ...) into
 
 Both full tables (~40 MB for human) are downloaded once and cached. All lookups are local.
 """
+import json
 import time
 from collections import defaultdict
 from pathlib import Path
@@ -36,6 +37,13 @@ EFFECT_LABEL = {1: "activates", -1: "inhibits", 0: "mixed", None: "sign unknown"
 NO_DATA = "no mechanism data"
 
 
+# OmniPath's own per-resource licence metadata marks each resource's permitted `purpose`.
+# Only "commercial" is safe for for-profit use; "academic", "non_profit" and the composite
+# aggregators are not, and a resource missing from the listing cannot be verified at all.
+COMMERCIAL_OK = {"commercial"}
+RESOURCES_URL = f"{BASE}/resources"
+
+
 # ---------- download / cache ----------
 
 def _download(endpoint, params, path):
@@ -46,6 +54,32 @@ def _download(endpoint, params, path):
     tmp = path.with_suffix(".part")
     tmp.write_bytes(r.content)
     tmp.replace(path)
+
+
+def resource_purposes(refresh=False, cache_dir=CACHE):
+    """{resource name: permitted purpose} from OmniPath's /resources listing."""
+    path = Path(cache_dir) / "omnipath_resources.json"
+    stale = not path.exists() or time.time() - path.stat().st_mtime > MAX_AGE_DAYS * 86400
+    if refresh or stale:
+        r = requests.get(RESOURCES_URL, params={"format": "json"}, timeout=180)
+        r.raise_for_status()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(r.text)
+    data = json.loads(path.read_text())
+    return {k: ((v.get("license") or {}).get("purpose")) for k, v in data.items()}
+
+
+def commercial_ok(sources, purposes):
+    """True if at least one resource behind this record permits commercial use.
+
+    One permissively licensed resource is enough to support the record on its own.
+    A resource whose purpose is academic/non-profit, a composite aggregator, or one that
+    is not in the listing at all, cannot carry it.
+    """
+    for s in (sources or "").split(";"):
+        if s and purposes.get(s.split("_")[0]) in COMMERCIAL_OK:
+            return True
+    return False
 
 
 def load_tables(species=9606, license="academic", refresh=False, cache_dir=CACHE):
@@ -71,6 +105,12 @@ def load_tables(species=9606, license="academic", refresh=False, cache_dir=CACHE
 
 
 # ---------- building the directed mechanism index ----------
+
+def _usable(sources, include_predicted, purposes):
+    if purposes is not None and not commercial_ok(sources, purposes):
+        return False
+    return _confident(sources, include_predicted)
+
 
 def _confident(sources, include_predicted):
     if include_predicted:
@@ -103,13 +143,14 @@ def combine_signs(signs):
     return known.pop() if len(known) == 1 else 0
 
 
-def build_index(interactions, enz_sub, names, include_predicted=False):
+def build_index(interactions, enz_sub, names, include_predicted=False, purposes=None):
     """{(source, target): mechanism} for ordered pairs of proteins in `names`.
 
     mechanism = {"sign": 1 / -1 / 0 (mixed) / None (directed, sign unknown),
                  "effect": label, "kinds": sorted kinds, "details": [lines],
                  "sources": "...", "n_refs": int}
     Names are matched case-insensitively and returned in the spelling used in `names`.
+    `purposes`: pass resource_purposes() to keep only records usable commercially.
     """
     canon = {n.upper(): n for n in names}
     acc = defaultdict(lambda: {"signs": [], "kinds": set(), "details": [], "sources": set(),
@@ -122,7 +163,7 @@ def build_index(interactions, enz_sub, names, include_predicted=False):
         b = canon.get(r["target_genesymbol"].upper())
         if not a or not b or a == b or r.get("is_directed") != "True":
             continue
-        if not _confident(r["sources"], include_predicted):
+        if not _usable(r["sources"], include_predicted, purposes):
             continue
         sign = _row_sign(r)
         kind = TRANSCRIPTIONAL if r["type"] == "transcriptional" else None
@@ -140,7 +181,7 @@ def build_index(interactions, enz_sub, names, include_predicted=False):
     for r in enz_sub.to_dict("records"):
         a = canon.get(r["enzyme_genesymbol"].upper())
         b = canon.get(r["substrate_genesymbol"].upper())
-        if not a or not b or a == b or not _confident(r["sources"], include_predicted):
+        if not a or not b or a == b or not _usable(r["sources"], include_predicted, purposes):
             continue
         kind = KIND_ALIASES.get(r["modification"], r["modification"])
         m = acc[(a, b)]

@@ -204,6 +204,37 @@ def greedy_cover(table, inputs, k=3, hop_weight=0.5):
     return _summarize(chosen, table, inputs, hop_weight)
 
 
+def top_pairs(table, inputs, n=3, hop_weight=0.5, candidates=40, distinct=True):
+    """The n best pairs of targets by combined weighted coverage of the input list.
+
+    `--cover 2` returns only the single best pair; for structural follow-up it helps to
+    see several. With distinct=True a protein appears in at most one returned pair, so
+    the list is not n variations on the same dominant hub.
+    """
+    cand = sorted(table, key=lambda x: (-_value(table[x], hop_weight), x))[:candidates]
+    scored = []
+    for a, b in combinations(cand, 2):
+        cur = {}
+        for t in (a, b):
+            for i, h in table[t].items():
+                w = _w(h, hop_weight)
+                if w > cur.get(i, 0.0):
+                    cur[i] = w
+        scored.append((round(sum(cur.values()), 2), len(cur), a, b))
+    scored.sort(key=lambda t: (-t[0], -t[1], t[2], t[3]))
+    out, used = [], set()
+    for value, reached, a, b in scored:
+        if distinct and (a in used or b in used):
+            continue
+        out.append({"protein_a": a, "protein_b": b, "score": value,
+                    "reached_any": reached,
+                    "reached_pct": round(100 * reached / len(inputs), 1)})
+        used.update((a, b))
+        if len(out) >= n:
+            break
+    return out
+
+
 def exact_cover(table, inputs, k=3, hop_weight=0.5, candidates=60):
     """Test every combination of k targets among the `candidates` best single targets."""
     cand = sorted(table, key=lambda n: (-_value(table[n], hop_weight), n))[:candidates]

@@ -15,6 +15,7 @@ Data comes from public databases:
 | [STRING](https://string-db.org) | Combined evidence: experiments, curated complexes, text mining, co-expression, predictions. Scored 0–1. | No |
 | [BioGRID](https://thebiogrid.org) | Experimentally curated interactions only (Y2H, AP-MS, co-IP…). | Free key |
 | [OmniPath](https://omnipathdb.org) | `--mechanism`: direction, activation/inhibition and modification sites, combined from ~100 resources (SIGNOR, PhosphoSitePlus, KEGG, Reactome, CollecTRI…). Human, mouse, rat. | No |
+| [RCSB PDB](https://www.rcsb.org) + [UniProt](https://www.uniprot.org) | `--structures`: 3D structures, resolution and bound ligands per protein and per pair. `--ternary` adds ligand burial, exit vectors and clash-free poses. | No |
 
 ## Install
 
@@ -59,6 +60,12 @@ python ppi_hubs.py -f examples/genes_example.txt --source both --exclude-hubs --
 
 # ... and how each top target acts on your list (activates / inhibits, mechanism)
 python ppi_hubs.py -f examples/genes_example.txt --source both --exclude-hubs --depth 2 --mechanism
+
+# Druggability: PDB entries and ligands for the top targets and the best 3 pairs
+python ppi_hubs.py -f examples/genes_example.txt --source both --exclude-hubs --structures
+
+# ... plus ligand burial, exit vectors and clash-free ternary poses (PROTAC triage)
+python ppi_hubs.py -f examples/genes_example.txt --source both --exclude-hubs --structures --ternary
 
 # Mouse
 python ppi_hubs.py Trp53 Mdm2 Bax --species 10090
@@ -131,6 +138,18 @@ so compare runs with and without the flag.
 | `--omnipath-license` | `academic` or `commercial`: which OmniPath records you may use | academic |
 | `--refresh-omnipath` | Re-download the cached OmniPath tables (done automatically after 30 days) | off |
 
+**Structures (RCSB PDB)**
+
+| Option | Meaning | Default |
+|---|---|---|
+| `--structures` | Look up PDB entries and bound ligands for the top targets and the best pairs | off |
+| `--struct-targets` | How many top targets to look up | 10 |
+| `--pairs` | How many best target pairs to report | 3 |
+| `--ternary` | For each pair with a ligand on both sides: ligand burial, exit vectors, clash-free pose scan | off |
+| `--ternary-vectors` | Exit vectors per ligand to try | 3 |
+| `--ternary-poses` | Distinct arrangements written as PDB files per pair | 5 |
+| `--refresh-structures` | Re-download cached PDB metadata (automatic after 30 days) | off |
+
 **Output**
 
 | Option | Meaning | Default |
@@ -152,6 +171,19 @@ so compare runs with and without the flag.
 | `paths.csv` | `--mechanism`: for each top target and each input it reaches, the route (direct or via a bridge), the effect on the input, the reverse effect, and each step's mechanism |
 | `target_effects.csv` | `--mechanism`: per target, how many inputs it activates / inhibits / mixed / sign unknown / no data, with names |
 | `mechanisms.csv` | `--mechanism`: every directed OmniPath record among the proteins in the network |
+
+### Structural output (`--structures`, `--ternary`)
+
+| File | Content |
+|---|---|
+| `top_pairs.csv` | The best `--pairs` target pairs by combined coverage (each protein appears in at most one pair) |
+| `structures.csv` | Per protein: number of PDB entries, how many have a real ligand, best resolution, best ligand-bound entry, distinct ligands |
+| `ligands.csv` | Every non-additive ligand found, with its PDB entry, chain, weight, resolution and name |
+| `pair_structures.csv` | Per pair: the best ligand-bound entry on each side, and any entry containing **both** proteins |
+| `ternary_summary.csv` | Per pair: ligand burial on each side, best attachment atoms and linker length, % of poses that are clash-free, number of distinct arrangements, warnings |
+| `exit_vectors.csv` | Candidate linker attachment atoms: relative solvent exposure, SASA, how blocked the outward cone is, coordinates |
+| `ternary_poses.csv` | The scanned poses (top 200 per pair) with linker length, tilt, spin, clashes and contacts |
+| `poses/pose_<A>_<B>_<n>.pdb` | The distinct arrangements as PDB files — open in PyMOL or ChimeraX |
 
 ### The interactive map (`network.html`)
 
@@ -217,6 +249,55 @@ A chained effect is a **hypothesis**: it depends on cell type, timing and which 
 The two OmniPath tables (~40 MB for human) are downloaded once and cached in
 `~/.cache/ppi-hub-finder/`.
 
+### How the structural part works
+
+**Which ligands count.** Crystallisation additives, buffers, cryoprotectants, glycans and
+ions (`structures.ADDITIVES`) are never counted as ligands. Cofactors and nucleotides
+(ATP, NAD, HEM…) are tracked separately, because an ATP site is a real pocket but not a
+drug-like starting point on its own. Anything else is `fragment` (150–300 Da) or
+`drug-like` (> 300 Da). **A ligand only counts for the protein whose chains it sits on**,
+so in a co-complex the partner is not credited with it.
+
+**Ligand burial** is Shrake-Rupley SASA (Biopython): the ligand's exposed area in the
+complex divided by its area free in solution. 0.99 means a fully enclosed pocket with
+nowhere for a linker to leave; ~0.6–0.9 is typical of a pocket with a solvent-facing rim.
+
+**Exit vectors** are the ligand's solvent-exposed heavy atoms, each with a direction
+pointing away from the local protein wall, and an `openness` score counting protein atoms
+inside a 35° cone, 12 Å long, along that direction. If no atom is exposed, the most
+exposed atoms are still returned but flagged `no_open_vector` — that is itself the answer.
+
+**Ternary pose scan.** Protein A is fixed. Protein B is placed so its exit vector points
+back at A's, with four parameters sampled: the attachment-point separation (the linker
+span, 5–20 Å), the tilt of the A→B direction away from A's exit vector (0/20/40°), the
+azimuth of that tilt, and B's spin about the axis. Each pose is scored by heavy-atom
+clashes (< 2.5 Å) and interface contacts (< 4.5 Å). Thousands of near-identical poses are
+then clustered so you get a handful of genuinely different arrangements.
+
+### How much to trust the ternary scan
+
+`validation/benchmark_5t35.py` runs the scan on the two binary structures (BRD4+JQ1,
+VHL+VH032) and compares every pose with the real BRD4:MZ1:VHL ternary complex (5T35):
+
+```
+poses 16848 | clash-free 11917 (71%) | distinct arrangements 10
+sampling  - closest pose to native:        5.4 A
+scoring   - top-ranked pose:               30.6 A
+            median over clash-free poses:  30.8 A
+```
+
+Read that honestly:
+
+- **The sampling works.** The native arrangement is inside the searched set (5.4 Å CA RMSD).
+- **The scoring does not.** Ranking by clashes and contacts does not pick it out; the
+  top-ranked pose is 30 Å away. Clash-freedom is weak evidence — 71% of poses pass.
+- **So this is triage, not prediction.** A pair where *no* linker length gives a clash-free
+  pose, or where a ligand is ~99% buried, is a real red flag. A pair with many clash-free
+  arrangements is permissive — it does not tell you the PROTAC will work, which depends on
+  linker chemistry, induced fit and cooperativity that no rigid scan captures.
+- Everything is computed from **one crystal conformation** of each protein, and proteins
+  move. Use the pose files as hypotheses to model properly, not as answers.
+
 ## Caveats
 
 - STRING's score is not pure experiment. Use `--min-escore` or BioGRID for "proven binding".
@@ -228,6 +309,7 @@ The two OmniPath tables (~40 MB for human) are downloaded once and cached in
 
 ## Data licences
 
+RCSB PDB data is in the public domain (CC0); UniProt is CC BY 4.0.
 STRING: CC BY 4.0. BioGRID: MIT. OmniPath: each record keeps the licence of its original
 resource; `--omnipath-license commercial` keeps only records allowed for commercial use.
 Please cite them if you publish results.

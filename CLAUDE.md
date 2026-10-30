@@ -27,6 +27,10 @@ and tested.
   page with toggles, replaced pyvis). Tested live on the example (human, depth 1/2), mouse,
   `--only-within`, unsupported species; page checked in a browser (no console errors).
 
+- 2026-10-30 (later): `--structures` (RCSB/UniProt inventory) and `--ternary` (ligand SASA,
+  exit vectors, clash-checked rigid pose scan) + `validation/benchmark_5t35.py`.
+  **Local only, not pushed** - Pawel wants to try it on a real target list first.
+
 ## Layout
 - `ppi_hubs.py`: CLI entry point (argparse). Flow: resolve names (STRING) → fetch
   partners → optional depth-2 shell expansion → dedupe → graph → rank → cover → plots → CSVs.
@@ -47,6 +51,16 @@ and tested.
   by `_bridge_rank`; direct partners without a record also get bridge chains.
 - `ppi/interactive.py`: builds JSON + self-contained vis-network page (CDN). Overview vs
   per-target view (DataView filters), effect/mechanism toggles, side panel per target.
+- `ppi/structures.py`: UniProt gene->accession, RCSB search (accession->entries) and
+  GraphQL (resolution, chains, ligands), all cached per entry in `~/.cache/ppi-hub-finder/rcsb`.
+  `ADDITIVES`/`COFACTORS` classify ligands; `ligands_of(entry, acc)` attributes a ligand to a
+  protein by auth-chain intersection (without this, co-complexes credit both partners).
+- `ppi/geometry.py`: mmCIF fetch+cache, `ligand_sasa` (Biopython Shrake-Rupley, complex vs
+  free ligand), `exit_vectors` (exposed atoms + outward direction + cone openness; falls back
+  to the most exposed atoms flagged `buried`), `ternary_scan` (samples linker length, tilt,
+  azimuth, spin; counts clashes/contacts), `cluster_poses`, `write_pose`.
+  `chains_near_ligand` drops crystal-packing neighbours by a 15% contact threshold.
+  `_apply` wraps matmul in errstate: numpy 2.0 + Apple Accelerate emits spurious warnings.
 - `ppi/plot.py`: matplotlib PNG. Blue circles = inputs, orange diamonds =
   outside proteins, red = best target (solid = direct, dashed = 2-hop paths), thick grey =
   edge in both DBs.
@@ -60,8 +74,19 @@ and tested.
 - STRING names are canonical; BioGRID names are mapped case-insensitively onto them,
   falling back to BioGRID synonyms for outdated symbols.
 
+## Structural work: what the benchmark says
+`python validation/benchmark_5t35.py` (BRD4+JQ1 / VHL+VH032 vs the real 5T35 ternary):
+sampling reaches the native pose (5.4 A) but scoring by clashes+contacts does NOT rank it
+(top pose 30.6 A; 71% of poses are clash-free). So the output is triage, not prediction -
+keep saying so in docs and output. Improving this means a real scoring function
+(shape complementarity / desolvation / statistical potential), not more sampling.
+
 ## Open questions
 - Real-world target lists not tested yet (only the 14-gene example).
+- No E3-ligase mode yet: `--structures` ranks whatever is in the list. A built-in E3 table
+  (VHL, CRBN, MDM2, XIAP, DCAF15...) with known ligand-bound PDBs would answer "which of my
+  proteins is PROTAC-tractable, and with which E3" - Pawel raised this, not yet decided.
+- First `--structures` run on ~20 proteins fetches ~2000 PDB entries (~6 min); cached after.
 - Overview in network.html gets dense with many inputs; per-target views are the readable part.
 
 ## Ideas / possible next steps

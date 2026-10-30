@@ -23,6 +23,10 @@ and tested.
   one request): ~50 s for the example. Fetching all shell partners took >10 min.
 - Tests: `pytest` (config in `pyproject.toml` puts the repo root on `sys.path`).
 
+- 2026-10-30: `--mechanism` (OmniPath) + new interactive `network.html` (custom vis-network
+  page with toggles, replaced pyvis). Tested live on the example (human, depth 1/2), mouse,
+  `--only-within`, unsupported species; page checked in a browser (no console errors).
+
 ## Layout
 - `ppi_hubs.py`: CLI entry point (argparse). Flow: resolve names (STRING) → fetch
   partners → optional depth-2 shell expansion → dedupe → graph → rank → cover → plots → CSVs.
@@ -35,7 +39,15 @@ and tested.
   `partner_counts`, `reach_table` ({protein: {input: hops}}, hops 0 self / 1 direct / 2 via
   bridge), `rank_targets` (score = direct + hop_weight × two_hop), `greedy_cover`,
   `exact_cover` (all combos among top-N candidates; refuses > 5M combos), `two_hop_paths`.
-- `ppi/plot.py`: matplotlib PNG and pyvis HTML. Blue circles = inputs, orange diamonds =
+- `ppi/mechanisms.py`: OmniPath `interactions` (datasets omnipath + collectri) and `enz_sub`
+  tables, cached in `~/.cache/ppi-hub-finder` (30 days). `build_index` -> {(src, tgt): sign,
+  kinds, details}. Sign: consensus_* first, else is_*; several records disagree -> mixed (0).
+  Drops text-mined/predicted-only records (`LOW_CONFIDENCE`) and COMPLEX rows.
+  `target_paths`: per target/input, direct + bridge chains (sign = product), bridges ranked
+  by `_bridge_rank`; direct partners without a record also get bridge chains.
+- `ppi/interactive.py`: builds JSON + self-contained vis-network page (CDN). Overview vs
+  per-target view (DataView filters), effect/mechanism toggles, side panel per target.
+- `ppi/plot.py`: matplotlib PNG. Blue circles = inputs, orange diamonds =
   outside proteins, red = best target (solid = direct, dashed = 2-hop paths), thick grey =
   edge in both DBs.
 - `tests/test_network.py`, `examples/genes_example.txt`, `README.md` (user docs).
@@ -48,18 +60,17 @@ and tested.
 - STRING names are canonical; BioGRID names are mapped case-insensitively onto them,
   falling back to BioGRID synonyms for outdated symbols.
 
-## Things to verify on first live run
-1. `python ppi_hubs.py -f examples/genes_example.txt`: does `get_string_ids` with
-   `echo_query=1` return `queryItem`? Is `score` 0-1 in JSON? Are `escore`, etc. present?
-2. `--source both`: BioGRID response shape (dict keyed by id), field names
-   `OFFICIAL_SYMBOL_A/B`, `EXPERIMENTAL_SYSTEM_TYPE`, `PUBMED_ID`; does paging work?
-3. `--depth 2`: runtime and memory with 300 shell proteins × limit 1000; check the
-   pyvis tooltips (`\n` may render literally, in which case switch to `<br>`).
+## Open questions
+- Real-world target lists not tested yet (only the 14-gene example).
+- Overview in network.html gets dense with many inputs; per-target views are the readable part.
 
 ## Ideas / possible next steps
 - Penalise hubs by total degree instead of (or besides) the fixed `--exclude-hubs` list.
 - Cache API responses (e.g. `requests-cache`) to avoid re-fetching.
 - Edge-confidence-weighted paths at depth 2 (product of scores).
+- Option to use OmniPath directed links as a ranking source (now display/annotation only).
+- Map OmniPath complexes (COMPLEX:...) onto member proteins.
+- 2-hop paths of outside targets only reach inputs via first-shell bridges; second shell skipped.
 - Add structural evidence (PDBe/RCSB complexes) as a third source.
 - GitHub Actions running pytest.
 
@@ -67,3 +78,5 @@ and tested.
 pip install -r requirements.txt pytest
 pytest -q
 python ppi_hubs.py -f examples/genes_example.txt --depth 2 --cover 2 --exact
+set -a; . ./.env; set +a   # BioGRID key
+python ppi_hubs.py -f examples/genes_example.txt --source both --exclude-hubs --depth 2 --mechanism

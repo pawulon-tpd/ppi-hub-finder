@@ -1,4 +1,4 @@
-"""Static (PNG) and interactive (HTML) interaction maps."""
+"""Static (PNG) interaction map. The interactive map is in interactive.py."""
 import matplotlib
 
 matplotlib.use("Agg")
@@ -70,30 +70,3 @@ def draw_png(H, ranking, path, best=None, paths=()):
     fig.tight_layout()
     fig.savefig(path, dpi=160)
     plt.close(fig)
-
-
-def draw_html(H, ranking, path, best=None, paths=()):
-    from pyvis.network import Network
-
-    info = ranking.set_index("protein")
-    best_e, path_e, _ = _split_edges(H, best, paths)
-    best_e, path_e = {frozenset(e) for e in best_e}, {frozenset(e) for e in path_e}
-    net = Network(height="850px", width="100%", cdn_resources="remote")
-    for n, d in H.nodes(data=True):
-        r = info.loc[n]
-        color = BEST_C if n == best else (INPUT_C if d["is_input"] else HUB_C)
-        title = (f"{n} ({'input' if d['is_input'] else 'outside'}) - score {r.score}\n"
-                 f"Direct links to {int(r.n_input_partners)} inputs: {r.input_partners}")
-        if r.n_two_hop:
-            title += f"\n2-hop to {int(r.n_two_hop)} inputs: {r.two_hop_partners or '(see CSV)'}"
-        net.add_node(n, label=n, color=color, title=title,
-                     shape="dot" if d["is_input"] else "diamond",
-                     size=10 + 4 * float(r.score))
-    for a, b, d in H.edges(data=True):
-        e = frozenset((a, b))
-        net.add_edge(a, b, title=" + ".join(sorted(d["sources"])),
-                     width=1 + 2 * (len(d["sources"]) - 1),
-                     color=BEST_C if (e in best_e or e in path_e) else EDGE_C,
-                     dashes=e in path_e)
-    net.barnes_hut(spring_length=180)
-    net.save_graph(str(path))

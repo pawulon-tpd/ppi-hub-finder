@@ -1,4 +1,4 @@
-from ppi import network, plot
+from ppi import interactive, mechanisms, network, plot
 
 
 def E(a, b, src="STRING", w=0.9):
@@ -60,7 +60,8 @@ def test_plots(tmp_path):
     paths = network.two_hop_paths(G, best, t)
     H = plot.focus_subgraph(G, r, extra=[x for x, _ in paths] + ["T"])
     plot.draw_png(H, r, tmp_path / "n.png", best, paths)
-    plot.draw_html(H, r, tmp_path / "n.html", best, paths)
+    _, _, views = mechanisms.analyse_targets(G, {}, t, ["T", "X"])
+    interactive.draw_html(G, r, tmp_path / "n.html", set(H.nodes), views, best=best)
     assert (tmp_path / "n.png").stat().st_size > 0 and (tmp_path / "n.html").stat().st_size > 0
 
 

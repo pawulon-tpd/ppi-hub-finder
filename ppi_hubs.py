@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from ppi import biogrid_api, network, plot, string_api
+from ppi import biogrid_api, interactive, mechanisms, network, plot, string_api
 
 
 def parse():
@@ -49,6 +49,17 @@ def parse():
     p.add_argument("--exact", action="store_true",
                    help="test all combinations of --cover targets (among --candidates) instead of greedy")
     p.add_argument("--candidates", type=int, default=60, help="--exact: candidate pool size [60]")
+    p.add_argument("--mechanism", action="store_true",
+                   help="annotate how proteins act on each other (activation/inhibition, "
+                        "phosphorylation, ...) from OmniPath; human, mouse, rat")
+    p.add_argument("--mech-targets", type=int, default=20,
+                   help="how many top targets get path analysis and a view in network.html [20]")
+    p.add_argument("--include-predicted", action="store_true",
+                   help="--mechanism: also keep text-mined / predicted-only OmniPath records")
+    p.add_argument("--omnipath-license", choices=["academic", "commercial"], default="academic",
+                   help="OmniPath records allowed for this use [academic]")
+    p.add_argument("--refresh-omnipath", action="store_true",
+                   help="re-download the cached OmniPath tables (auto after 30 days)")
     p.add_argument("--max-external", type=int, default=25, help="max outside proteins drawn [25]")
     p.add_argument("--top", type=int, default=10, help="rows to print [10]")
     p.add_argument("--out", default="results", help="output folder [results]")
@@ -152,21 +163,46 @@ def main():
     G = network.build_graph(edges, inputs)
     table = network.reach_table(G, inputs, args.depth)
     ranking = network.rank_targets(G, inputs, table, args.depth, args.hop_weight)
-    ranking.to_csv(out / "target_ranking.csv", index=False)
     cover_fn = network.exact_cover if args.exact else network.greedy_cover
     kw = {"candidates": args.candidates} if args.exact else {}
     picks, left = cover_fn(table, inputs, args.cover, args.hop_weight, **kw)
     pd.DataFrame(picks).to_csv(out / "cover.csv", index=False)
 
-    # 5. Draw
+    # 5. Mechanisms: how the top targets act on the inputs (directly or via a bridge)
+    index, saved = {}, ["target_ranking.csv", "cover.csv", "input_partner_counts.csv", "edges.csv"]
+    if args.mechanism:
+        if args.species in mechanisms.SPECIES:
+            print("Annotating mechanisms (OmniPath)...")
+            inter, enz = mechanisms.load_tables(args.species, args.omnipath_license,
+                                                args.refresh_omnipath)
+            index = mechanisms.build_index(inter, enz, G.nodes, args.include_predicted)
+            mechanisms.index_table(index, G).to_csv(out / "mechanisms.csv", index=False)
+            saved.append("mechanisms.csv")
+        else:
+            print(f"--mechanism: OmniPath has no data for species {args.species}, skipped")
+    targets = list(dict.fromkeys(ranking.protein.head(args.mech_targets).tolist()
+                                 + [p["target"] for p in picks]))
+    paths_df, effects, views = mechanisms.analyse_targets(G, index, table, targets)
+    if index:
+        paths_df.to_csv(out / "paths.csv", index=False)
+        effects.to_csv(out / "target_effects.csv", index=False)
+        saved += ["paths.csv", "target_effects.csv"]
+        ranking = ranking.merge(effects[[c for c in effects if c == "protein" or c.startswith("n_")]],
+                                on="protein", how="left")
+    ranking.to_csv(out / "target_ranking.csv", index=False)
+
+    # 6. Draw
     best = ranking.iloc[0].protein
     paths = network.two_hop_paths(G, best, table) if args.depth == 2 else []
     extra = [p["target"] for p in picks] + [x for x, _ in paths]
     H = plot.focus_subgraph(G, ranking, args.max_external, extra=extra)
     plot.draw_png(H, ranking, out / "network.png", best, paths)
-    plot.draw_html(H, ranking, out / "network.html", best, paths)
+    interactive.draw_html(G, ranking, out / "network.html", set(H.nodes), views, index, best,
+                          title=f"{len(inputs)} proteins: {', '.join(inputs[:8])}"
+                                + (" ..." if len(inputs) > 8 else ""))
+    saved += ["network.png", "network.html"]
 
-    # 6. Report
+    # 7. Report
     cols = ["protein", "in_input", "n_input_partners", "coverage_pct", "input_partners"]
     if args.depth == 2:
         cols[3:3] = ["n_two_hop", "score"]
@@ -183,8 +219,13 @@ def main():
             print(pd.DataFrame(picks).to_string(index=False))
         if left:
             print("Not reached by these targets:", ", ".join(left))
-    print(f"\nSaved to {out}/: target_ranking.csv, cover.csv, input_partner_counts.csv, "
-          "edges.csv, network.png, network.html")
+        if index:
+            print("\nHow the top targets act on your list (OmniPath; details in paths.csv):")
+            cols = ["activates", "inhibits", "mixed", "sign_unknown", "no_mechanism_data"]
+            e = effects.head(args.top)[["protein"] + [f"n_{c}" for c in cols]]
+            print(e.rename(columns=lambda c: c[2:] if c.startswith("n_") else c)
+                  .to_string(index=False))
+    print(f"\nSaved to {out}/: {', '.join(saved)}")
 
 
 if __name__ == "__main__":

@@ -16,7 +16,9 @@ superposition captures. Treat a clash-free pose as a hypothesis to model properl
 badly clashing one as a reason to look at a different exit vector or a longer linker.
 """
 import gzip
+import os
 import warnings
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -99,16 +101,30 @@ _MASS = {"C": 12.011, "N": 14.007, "O": 15.999, "S": 32.06, "P": 30.974, "F": 18
 
 # ---------- burial ----------
 
-def ligand_sasa(model, lig, probe_radius=1.4, n_points=200):
+def ligand_sasa(model, lig, probe_radius=1.4, n_points=200, keep_chains=None):
     """Per-atom and total ligand SASA, in the complex and for the free ligand.
 
     buried_fraction = 1 - SASA(in complex) / SASA(ligand alone). 1.0 = fully enclosed.
+
+    `keep_chains` limits the calculation to the chains that really bind the ligand. Without
+    it a neighbouring copy in the crystal counts as protein and the ligand looks more
+    buried than it is in the biological unit (and every extra chain costs time).
     """
     res = lig["residue"]
     sr = ShrakeRupley(probe_radius=probe_radius, n_points=n_points)
 
-    sr.compute(model, level="A")
-    in_complex = {a.get_id(): float(a.sasa) for a in res.get_atoms()}
+    if keep_chains is None:
+        target = model
+    else:
+        target = model.copy()
+        for chain in list(target):
+            if chain.id not in set(keep_chains) | {lig["chain"]}:
+                target.detach_child(chain.id)
+    sr.compute(target, level="A")
+    sasa_by_id = {(a.get_parent().get_parent().id, a.get_parent().id, a.get_id()): float(a.sasa)
+                  for a in target.get_atoms()}
+    in_complex = {a.get_id(): sasa_by_id.get((lig["chain"], res.id, a.get_id()), 0.0)
+                  for a in res.get_atoms()}
 
     free_struct = res.copy()                       # detached copy: ligand on its own
     free_struct.detach_parent()
@@ -272,25 +288,31 @@ def chains_near_ligand(model, lig, cutoff=6.0, min_frac=0.15):
     return {c for c, n in counts.items() if n >= min_frac * top}
 
 
-def _count_pairs(ca, cb, centre_a, radius_a, clash, contact):
+def _count_pairs(ca, cb, centre_a, radius_a, clash, contact, chunk=512):
     """Heavy-atom clash and contact counts between a fixed set A and a posed set B.
 
     Only B atoms that could possibly reach A (inside A's bounding sphere + contact) and
-    then only A atoms near those are compared, so each pose costs a small matrix.
+    then only A atoms near those are compared. Distances are kept squared and computed as
+    |a|^2 + |b|^2 - 2a.b, which hands the work to BLAS instead of building an N x M x 3
+    difference array.
     """
-    near_b = cb[np.linalg.norm(cb - centre_a, axis=1) <= radius_a + contact]
+    c2, k2 = contact * contact, clash * clash
+    near_b = cb[((cb - centre_a) ** 2).sum(1) <= (radius_a + contact) ** 2]
     if not len(near_b):
         return 0, 0
     centre_b = near_b.mean(axis=0)
-    radius_b = float(np.linalg.norm(near_b - centre_b, axis=1).max())
-    near_a = ca[np.linalg.norm(ca - centre_b, axis=1) <= radius_b + contact]
+    radius_b = float(np.sqrt(((near_b - centre_b) ** 2).sum(1).max()))
+    near_a = ca[((ca - centre_b) ** 2).sum(1) <= (radius_b + contact) ** 2]
     if not len(near_a):
         return 0, 0
+    aa = (near_a ** 2).sum(1)
     n_clash = n_contact = 0
-    for i in range(0, len(near_b), 256):
-        d = np.linalg.norm(near_b[i:i + 256, None, :] - near_a[None, :, :], axis=-1)
-        n_contact += int((d < contact).sum())
-        n_clash += int((d < clash).sum())
+    with np.errstate(divide="ignore", over="ignore", invalid="ignore"):   # see _apply
+        for i in range(0, len(near_b), chunk):
+            blk = near_b[i:i + chunk]
+            d2 = (blk ** 2).sum(1)[:, None] + aa[None, :] - 2.0 * (blk @ near_a.T)
+            n_contact += int((d2 < c2).sum())
+            n_clash += int((d2 < k2).sum())
     return n_clash, n_contact
 
 
@@ -330,45 +352,129 @@ def _axis_directions(dir_a, tilts, n_azimuth):
     return out
 
 
+# Worker state. Each process keeps the two coordinate sets, so the arrays are sent once
+# per worker instead of once per task.
+_W = {}
+
+
+def _init_worker(ca, cb, clash, contact):
+    _W.update(ca=ca, cb=cb, clash=clash, contact=contact,
+              centre_a=ca.mean(axis=0),
+              radius_a=float(np.sqrt(((ca - ca.mean(axis=0)) ** 2).sum(1).max())))
+
+
+# columns of the array a worker returns, one row per pose
+SCAN_COLS = ("linker_A", "spin_rad", "clashes", "contacts", "cx", "cy", "cz")
+
+
+def _scan_axis(task):
+    """All poses for one displacement axis: every linker length x every spin angle.
+
+    Returns a plain float array rather than dicts: the result is pickled back from the
+    worker, and dicts holding numpy matrices cost far more to ship than numbers. The
+    rotation and translation are cheap to rebuild in the parent with `pose_transform`.
+    """
+    axis, tilt, azim, anchor_a, anchor_b, dir_b, linkers, n_rot = task
+    ca, cb = _W["ca"], _W["cb"]
+    Ra = _rot_between(dir_b, -axis)
+    base = _apply(cb - anchor_b, Ra)
+    out = np.empty((len(linkers) * n_rot, len(SCAN_COLS)), dtype="d")
+    k = 0
+    for L in linkers:
+        target = anchor_a + axis * L
+        for i in range(n_rot):
+            ang = 2 * np.pi * i / n_rot
+            coords = _apply(base, _rot_axis(axis, ang)) + target
+            n_clash, n_contact = _count_pairs(ca, coords, _W["centre_a"], _W["radius_a"],
+                                              _W["clash"], _W["contact"])
+            out[k, :4] = (L, ang, n_clash, n_contact)
+            out[k, 4:] = coords.mean(axis=0)
+            k += 1
+    return out
+
+
+def pose_transform(row):
+    """(rotation, translation, B anchor) for a pose, rebuilt from its parameters."""
+    axis, anchor_a, anchor_b, dir_b = (row["_axis"], row["_anchor_a"],
+                                       row["_anchor_b"], row["_dir_b"])
+    R = _rot_axis(axis, row["_spin_rad"]) @ _rot_between(dir_b, -axis)
+    return R, anchor_a + axis * row["linker_A"], anchor_b
+
+
+def resolve_workers(workers=None):
+    """None/0 -> every core; 1 -> run in this process; n -> n processes."""
+    if workers in (None, 0):
+        return max(1, os.cpu_count() or 1)
+    return max(1, int(workers))
+
+
 def ternary_scan(model_a, lig_a, vec_a, model_b, lig_b, vec_b,
                  linkers=LINKERS, n_rot=36, clash=CLASH, contact=CONTACT,
-                 chains_a=None, chains_b=None, tilts=(0,), n_azimuth=6):
+                 chains_a=None, chains_b=None, tilts=(0,), n_azimuth=6, workers=1):
     """Place B so its ligand exit vector faces A's, and scan the free parameters.
 
     Sampled: linker length (anchor separation), the tilt of the A->B displacement away
     from A's exit vector, the azimuth of that tilt, and the spin of B about the
-    displacement axis. Returns one row per pose with clash and contact counts.
+    displacement axis. Returns one row per pose with clash and contact counts, best first.
+    A convenience wrapper over `scan_vector_pairs` for a single pair of exit vectors.
     """
-    atoms_a, ca = _model_coords(model_a, chains_a)
-    atoms_b, cb = _model_coords(model_b, chains_b)
+    _, ca = _model_coords(model_a, chains_a)
+    _, cb = _model_coords(model_b, chains_b)
     if not len(ca) or not len(cb):
         raise ValueError("one of the structures has no protein atoms")
-    centre_a = ca.mean(axis=0)
-    radius_a = float(np.linalg.norm(ca - centre_a, axis=1).max())
-
-    anchor_a = np.asarray(vec_a["coord"], "d")
-    dir_a = _unit(np.asarray(vec_a["direction"], "d"))
-    anchor_b = np.asarray(vec_b["coord"], "d")
-    dir_b = _unit(np.asarray(vec_b["direction"], "d"))
-
-    rows = []
-    for axis, tilt, azim in _axis_directions(dir_a, tilts, n_azimuth):
-        Ra = _rot_between(dir_b, -axis)            # B's vector points back along the axis
-        base_axis = _apply(cb - anchor_b, Ra)
-        for L in linkers:
-            target = anchor_a + axis * L
-            for i in range(n_rot):
-                ang = 2 * np.pi * i / n_rot
-                spin = _rot_axis(axis, ang)
-                coords = _apply(base_axis, spin) + target
-                n_clash, n_contact = _count_pairs(ca, coords, centre_a, radius_a, clash, contact)
-                rows.append({"linker_A": L, "tilt_deg": tilt, "azimuth_deg": azim,
-                             "spin_deg": round(np.degrees(ang), 1),
-                             "clashes": n_clash, "contacts": n_contact,
-                             "_R": spin @ Ra, "_t": target, "_anchor_b": anchor_b,
-                             "_centroid": coords.mean(axis=0)})
+    rows = scan_vector_pairs(ca, cb, [vec_a], [vec_b], linkers, n_rot, tilts, n_azimuth,
+                             clash, contact, workers)
     rows.sort(key=lambda d: (d["clashes"], -d["contacts"]))
     return rows
+
+
+def scan_vector_pairs(ca, cb, va, vb, linkers=LINKERS, n_rot=36, tilts=(0, 20, 40),
+                      n_azimuth=6, clash=CLASH, contact=CONTACT, workers=None):
+    """Every exit-vector pair x every displacement axis, in one batch.
+
+    One task per (vector pair, axis) keeps the workers evenly fed; mapping them all at
+    once rather than per vector pair avoids a synchronisation point per pair.
+    """
+    tasks, meta = [], []
+    for ra in va:
+        for rb in vb:
+            anchor_a = np.asarray(ra["coord"], "d")
+            dir_a = _unit(np.asarray(ra["direction"], "d"))
+            anchor_b = np.asarray(rb["coord"], "d")
+            dir_b = _unit(np.asarray(rb["direction"], "d"))
+            for axis, tilt, azim in _axis_directions(dir_a, tilts, n_azimuth):
+                tasks.append((axis, tilt, azim, anchor_a, anchor_b, dir_b,
+                              tuple(linkers), n_rot))
+                meta.append({"atom_a": ra["atom"], "atom_b": rb["atom"],
+                             "openness_a": ra["openness"], "openness_b": rb["openness"],
+                             "tilt_deg": tilt, "azimuth_deg": azim, "_axis": axis,
+                             "_anchor_a": anchor_a, "_anchor_b": anchor_b, "_dir_b": dir_b})
+
+    n_workers = resolve_workers(workers)
+    chunks = None
+    if n_workers > 1 and len(tasks) > 1:
+        try:
+            with ProcessPoolExecutor(max_workers=min(n_workers, len(tasks)),
+                                     initializer=_init_worker,
+                                     initargs=(ca, cb, clash, contact)) as pool:
+                chunks = list(pool.map(_scan_axis, tasks, chunksize=1))
+        except Exception as exc:                                   # noqa: BLE001
+            # e.g. a session multiprocessing cannot re-import under macOS "spawn"
+            warnings.warn(f"parallel scan unavailable ({type(exc).__name__}), "
+                          f"using one process", RuntimeWarning, stacklevel=2)
+    if chunks is None:
+        _init_worker(ca, cb, clash, contact)
+        chunks = [_scan_axis(t) for t in tasks]
+
+    poses = []
+    for arr, info in zip(chunks, meta):
+        for r in arr:
+            poses.append({"linker_A": r[0], "tilt_deg": info["tilt_deg"],
+                          "azimuth_deg": info["azimuth_deg"],
+                          "spin_deg": round(float(np.degrees(r[1])), 1),
+                          "clashes": int(r[2]), "contacts": int(r[3]),
+                          "_spin_rad": float(r[1]), "_centroid": r[4:7], **info})
+    return poses
 
 
 def cluster_poses(rows, cutoff=8.0, max_clusters=10, clash_tol=0):
@@ -403,7 +509,7 @@ def write_pose(model_a, model_b, pose, path, chains_a=None, chains_b=None,
     for chain in list(b):
         if chains_b is not None and chain.id not in chains_b:
             b.detach_child(chain.id)
-    R, t, anchor = pose["_R"], pose["_t"], pose["_anchor_b"]
+    R, t, anchor = pose_transform(pose)
     for atom in b.get_atoms():
         atom.set_coord(_apply(atom.get_coord() - anchor, R) + t)
 
@@ -434,7 +540,7 @@ class _NoWater(Select):
 def analyse_pair(pdb_a, pdb_b, ligand_a=None, ligand_b=None, n_vectors=3,
                  linkers=LINKERS, n_rot=36, out_dir=None, tag="",
                  chains_a=None, chains_b=None, tilts=(0, 20, 40), n_azimuth=6,
-                 cluster_cutoff=8.0, max_poses=5):
+                 cluster_cutoff=8.0, max_poses=5, workers=None):
     """Burial + exit vectors for both structures, then a pose scan over vector pairs.
 
     Returns (summary dict, vectors DataFrame, poses DataFrame).
@@ -443,7 +549,8 @@ def analyse_pair(pdb_a, pdb_b, ligand_a=None, ligand_b=None, n_vectors=3,
     la, lb = pick_ligand(ma, ligand_a), pick_ligand(mb, ligand_b)
     ka = set(chains_a) if chains_a else chains_near_ligand(ma, la)
     kb = set(chains_b) if chains_b else chains_near_ligand(mb, lb)
-    sa, sb = ligand_sasa(ma, la), ligand_sasa(mb, lb)
+    sa = ligand_sasa(ma, la, keep_chains=ka)
+    sb = ligand_sasa(mb, lb, keep_chains=kb)
     va = exit_vectors(ma, la, sa, top=n_vectors, keep_chains=ka)
     vb = exit_vectors(mb, lb, sb, top=n_vectors, keep_chains=kb)
     if not va or not vb:
@@ -454,15 +561,10 @@ def analyse_pair(pdb_a, pdb_b, ligand_a=None, ligand_b=None, n_vectors=3,
     if vb[0].get("buried"):
         warn.append(f"{pdb_b.upper()}/{lb['resname']} is {sb['buried_fraction']:.0%} buried")
 
-    poses = []
-    for ia, ra in enumerate(va):
-        for ib, rb in enumerate(vb):
-            for row in ternary_scan(ma, la, ra, mb, lb, rb, linkers, n_rot,
-                                    chains_a=ka, chains_b=kb, tilts=tilts,
-                                    n_azimuth=n_azimuth):
-                row.update({"atom_a": ra["atom"], "atom_b": rb["atom"],
-                            "openness_a": ra["openness"], "openness_b": rb["openness"]})
-                poses.append(row)
+    _, ca = _model_coords(ma, ka)
+    _, cb = _model_coords(mb, kb)
+    poses = scan_vector_pairs(ca, cb, va, vb, linkers, n_rot, tilts, n_azimuth,
+                              workers=workers)
     poses.sort(key=lambda d: (d["clashes"], -d["contacts"]))
     reps = cluster_poses(poses, cutoff=cluster_cutoff, max_clusters=max_poses)
 

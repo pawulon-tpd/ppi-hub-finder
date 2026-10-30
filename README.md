@@ -136,7 +136,7 @@ so compare runs with and without the flag.
 | `--mechanism` | Annotate how proteins act on each other; adds `paths.csv`, `target_effects.csv`, `mechanisms.csv` and colours the interactive map | off |
 | `--mech-targets` | How many top targets get a path analysis and their own view in `network.html` | 20 |
 | `--include-predicted` | Also keep records supported only by text mining or kinase-substrate prediction | off |
-| `--omnipath-license` | `commercial` keeps only records that a commercially-licensed resource supports (see Licences) | academic |
+| `--omnipath-license` | Which records you may use. `commercial` (default) keeps only those a commercially-licensed resource supports; `academic` keeps everything (see Licences) | commercial |
 | `--refresh-omnipath` | Re-download the cached OmniPath tables (done automatically after 30 days) | off |
 
 **Structures (RCSB PDB)**
@@ -149,6 +149,7 @@ so compare runs with and without the flag.
 | `--ternary` | For each pair with a ligand on both sides: ligand burial, exit vectors, clash-free pose scan | off |
 | `--ternary-vectors` | Exit vectors per ligand to try | 3 |
 | `--ternary-poses` | Distinct arrangements written as PDB files per pair | 5 |
+| `--workers` | Processes for the pose scan; `0` = every core, `1` = no parallelism | 0 |
 | `--refresh-structures` | Re-download cached PDB metadata (automatic after 30 days) | off |
 
 **Output**
@@ -259,14 +260,21 @@ drug-like starting point on its own. Anything else is `fragment` (150–300 Da) 
 `drug-like` (> 300 Da). **A ligand only counts for the protein whose chains it sits on**,
 so in a co-complex the partner is not credited with it.
 
-**Ligand burial** is Shrake-Rupley SASA (Biopython): the ligand's exposed area in the
-complex divided by its area free in solution. 0.99 means a fully enclosed pocket with
+**Ligand burial** is Shrake-Rupley SASA (Biopython), computed over the chains that
+actually bind the ligand — a neighbouring copy in the crystal would otherwise count as
+protein and make the ligand look more buried than it is. It is the ligand's exposed area
+in the complex divided by its area free in solution. 0.99 means a fully enclosed pocket with
 nowhere for a linker to leave; ~0.6–0.9 is typical of a pocket with a solvent-facing rim.
 
 **Exit vectors** are the ligand's solvent-exposed heavy atoms, each with a direction
 pointing away from the local protein wall, and an `openness` score counting protein atoms
 inside a 35° cone, 12 Å long, along that direction. If no atom is exposed, the most
 exposed atoms are still returned but flagged `no_open_vector` — that is itself the answer.
+
+**Speed.** The pose scan runs across all cores by default (`--workers`). On a 10-core
+machine a 270,000-pose scan takes 9 s instead of 36 s. Scaling is about 2x on a small scan
+and 4x on a large one, not 10x: the work is split into one task per (exit-vector pair,
+displacement axis), and collecting the results back is serial. `--workers 1` disables it.
 
 **Ternary pose scan.** Protein A is fixed. Protein B is placed so its exit vector points
 back at A's, with four parameters sampled: the attachment-point separation (the linker
@@ -329,8 +337,9 @@ are not listed with a licence at all. Several of the largest are **non-commercia
 | KEA, HINT | unspecified NC-SA |
 | iPTMnet, Wang, DEPOD, Cellinker | CC BY-NC(-SA) |
 
-`--omnipath-license commercial` drops every record that no commercially-licensed resource
-supports (on the 24-protein example it keeps 92% of the mechanisms). Two warnings:
+**`--omnipath-license commercial` is the default**, so records that no commercially-licensed
+resource supports are dropped (on the 24-protein example this keeps 92% of the mechanisms).
+Pass `--omnipath-license academic` to use everything. Two warnings:
 
 - **The filter runs here, not on the server.** OmniPath's web service accepts a `license`
   parameter but, when tested, returned identical data for `academic` and `commercial` —

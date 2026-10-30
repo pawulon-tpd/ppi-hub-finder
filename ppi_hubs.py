@@ -56,10 +56,11 @@ def parse():
                    help="how many top targets get path analysis and a view in network.html [20]")
     p.add_argument("--include-predicted", action="store_true",
                    help="--mechanism: also keep text-mined / predicted-only OmniPath records")
-    p.add_argument("--omnipath-license", choices=["academic", "commercial"], default="academic",
-                   help="'commercial' drops records that only non-commercial resources "
-                        "support (PhosphoSitePlus, HPRD, phospho.ELM, ...). Filtered here, "
-                        "not by the server [academic]")
+    p.add_argument("--omnipath-license", choices=["academic", "commercial"], default="commercial",
+                   help="which OmniPath records you may use. 'commercial' (the default) "
+                        "drops records that only non-commercial resources support "
+                        "(PhosphoSitePlus, HPRD, phospho.ELM, ...); 'academic' keeps "
+                        "everything. Filtered here, not by the server [commercial]")
     p.add_argument("--refresh-omnipath", action="store_true",
                    help="re-download the cached OmniPath tables (auto after 30 days)")
     p.add_argument("--structures", action="store_true",
@@ -79,6 +80,9 @@ def parse():
                    help="--ternary: exit vectors per ligand to try [3]")
     p.add_argument("--ternary-poses", type=int, default=5,
                    help="--ternary: distinct arrangements to write as PDB files per pair [5]")
+    p.add_argument("--workers", type=int, default=0,
+                   help="--ternary: processes for the pose scan; 0 = every core, 1 = no "
+                        "parallelism [0]")
     p.add_argument("--refresh-structures", action="store_true",
                    help="re-download cached PDB metadata (auto after 30 days)")
     p.add_argument("--max-external", type=int, default=25, help="max outside proteins drawn [25]")
@@ -117,7 +121,8 @@ def run_ternary(args, pair_df, out):
     if not len(usable):
         print("\n--ternary: no pair has a ligand-bound structure on both sides, skipped")
         return []
-    print(f"\nTernary geometry for {len(usable)} pair(s) "
+    n_w = geometry.resolve_workers(args.workers)
+    print(f"\nTernary geometry for {len(usable)} pair(s) on {n_w} core(s) "
           f"(rigid triage, not a ternary-complex prediction):")
     rows, vecs, poses = [], [], []
     for r in usable.itertuples():
@@ -125,7 +130,8 @@ def run_ternary(args, pair_df, out):
         try:
             summary, v, p = geometry.analyse_pair(
                 r.ligand_pdb_a, r.ligand_pdb_b, n_vectors=args.ternary_vectors,
-                out_dir=out / "poses", tag=tag, max_poses=args.ternary_poses)
+                out_dir=out / "poses", tag=tag, max_poses=args.ternary_poses,
+                workers=args.workers)
         except Exception as exc:                                       # noqa: BLE001
             print(f"  {tag}: skipped ({exc})")
             continue
@@ -238,7 +244,8 @@ def main():
             purposes = None
             if args.omnipath_license == "commercial":
                 purposes = mechanisms.resource_purposes(args.refresh_omnipath)
-                print("  keeping only records from resources that allow commercial use")
+                print("  commercial licence: keeping only records that a commercially "
+                      "licensed resource supports (--omnipath-license academic for all)")
             index = mechanisms.build_index(inter, enz, G.nodes, args.include_predicted,
                                            purposes)
             mechanisms.index_table(index, G).to_csv(out / "mechanisms.csv", index=False)

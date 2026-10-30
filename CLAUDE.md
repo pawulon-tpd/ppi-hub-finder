@@ -89,6 +89,18 @@ omnipath_resources.json): a record survives only if some source resource has
 purpose == "commercial". Composite aggregators (CollecTRI, DoRothEA) and unlisted
 resources do not count. Keeps ~92% of mechanisms on the 24-gene example.
 
+## Performance notes (2026-10-30)
+- `_count_pairs` uses squared distances via |a|^2+|b|^2-2a.b (BLAS) instead of broadcasting:
+  0.60 -> 0.13 ms/pose. Verified identical to brute force on 300 random cases.
+- `ligand_sasa(keep_chains=...)` restricts SASA to the binding chains: 1.37 -> 0.33 s AND
+  more correct (4W9H VHL burial 0.781 -> 0.743 once crystal neighbours are dropped).
+- Pose scan parallelised with ProcessPoolExecutor, one task per (vector pair, axis).
+  Workers return compact float arrays, not dicts; `pose_transform` rebuilds R/t in the
+  parent on demand. 10 cores: 2x on a small scan, 3.9x on 270k poses (36 -> 9 s).
+  Falls back to serial with a warning if the pool cannot start (macOS spawn under
+  `python -c` / heredoc cannot re-import __main__).
+- `--omnipath-license` now defaults to commercial.
+
 ## Open questions
 - Real-world target lists not tested yet (only the 14-gene example).
 - No E3-ligase mode yet: `--structures` ranks whatever is in the list. A built-in E3 table

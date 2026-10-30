@@ -67,7 +67,8 @@ def parse():
     p.add_argument("--struct-targets", type=int, default=10,
                    help="--structures: how many top targets to look up [10]")
     p.add_argument("--pairs", type=int, default=3,
-                   help="how many best target pairs to report structurally [3]")
+                   help="how many best target pairs to report (always printed and saved "
+                        "to top_pairs.csv) [3]")
     p.add_argument("--ternary", action="store_true",
                    help="--structures: for each pair with a ligand on both sides, measure "
                         "ligand burial and exit vectors and scan clash-free ternary poses "
@@ -250,10 +251,10 @@ def main():
     ranking.to_csv(out / "target_ranking.csv", index=False)
 
     # 6. Structures: what is known in the PDB, and can a pair be linked without clashing
+    pairs = network.top_pairs(table, inputs, args.pairs, args.hop_weight)
+    pd.DataFrame(pairs).to_csv(out / "top_pairs.csv", index=False)
+    saved.append("top_pairs.csv")
     if args.structures:
-        pairs = network.top_pairs(table, inputs, args.pairs, args.hop_weight)
-        pd.DataFrame(pairs).to_csv(out / "top_pairs.csv", index=False)
-        saved.append("top_pairs.csv")
         want = list(dict.fromkeys(ranking.protein.head(args.struct_targets).tolist()
                                   + [p[k] for p in pairs for k in ("protein_a", "protein_b")]
                                   + inputs))
@@ -303,6 +304,9 @@ def main():
         print(counts.to_string(index=False))
         print("\nBest single targets:")
         print(ranking.head(args.top)[cols].to_string(index=False))
+        if pairs:
+            print(f"\nBest {len(pairs)} target pairs (each protein used once):")
+            print(pd.DataFrame(pairs).to_string(index=False))
         if picks:
             how = f"exact, best of top {args.candidates}" if args.exact else "greedy"
             print(f"\nBest combination of {len(picks)} different targets ({how}):")

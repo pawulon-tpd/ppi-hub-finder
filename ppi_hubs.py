@@ -72,6 +72,16 @@ def parse():
     p.add_argument("--pairs", type=int, default=3,
                    help="how many best target pairs to report (always printed and saved "
                         "to top_pairs.csv) [3]")
+    p.add_argument("--e3", nargs="*", metavar="GENE",
+                   help="also pair each top target with E3 ligases that have known "
+                        "small-molecule handles (PROTAC tractability). No names = "
+                        f"{', '.join(structures.DEFAULT_E3)}; 'all' = every E3 in the "
+                        "built-in table; or list your own")
+    p.add_argument("--e3-targets", type=int, default=5,
+                   help="--e3: how many top targets to test against the E3s [5]")
+    p.add_argument("--e3-pairs", type=int, default=6,
+                   help="--e3 --ternary: how many target-E3 combinations get the full "
+                        "geometry scan [6]")
     p.add_argument("--ternary", action="store_true",
                    help="--structures: for each pair with a ligand on both sides, measure "
                         "ligand burial and exit vectors and scan clash-free ternary poses "
@@ -113,20 +123,22 @@ def fetch(args, use_string, use_biogrid, key, string_ids, genes, include_interac
     return edges
 
 
-def run_ternary(args, pair_df, out):
+def run_ternary(args, pair_df, out, label="", prefix=""):
     """Ligand burial, exit vectors and clash-free pose scan for each druggable pair."""
     from ppi import geometry
 
     usable = pair_df[pair_df.both_have_ligand]
+    what = f"{label} " if label else ""
     if not len(usable):
-        print("\n--ternary: no pair has a ligand-bound structure on both sides, skipped")
+        print(f"\n--ternary: no {what}pair has a ligand-bound structure on both sides, "
+              "skipped")
         return []
     n_w = geometry.resolve_workers(args.workers)
-    print(f"\nTernary geometry for {len(usable)} pair(s) on {n_w} core(s) "
+    print(f"\nTernary geometry for {len(usable)} {what}pair(s) on {n_w} core(s) "
           f"(rigid triage, not a ternary-complex prediction):")
     rows, vecs, poses = [], [], []
     for r in usable.itertuples():
-        tag = f"{r.protein_a}_{r.protein_b}"
+        tag = f"{prefix + '_' if prefix else ''}{r.protein_a}_{r.protein_b}"
         try:
             summary, v, p = geometry.analyse_pair(
                 r.ligand_pdb_a, r.ligand_pdb_b, n_vectors=args.ternary_vectors,
@@ -148,11 +160,13 @@ def run_ternary(args, pair_df, out):
               f"{summary['distinct_arrangements']} distinct arrangements")
     if not rows:
         return []
-    pd.DataFrame(rows).to_csv(out / "ternary_summary.csv", index=False)
-    pd.concat(vecs, ignore_index=True).to_csv(out / "exit_vectors.csv", index=False)
-    pd.concat(poses, ignore_index=True).to_csv(out / "ternary_poses.csv", index=False)
+    stem = f"{prefix}_" if prefix else ""
+    names = [f"{stem}ternary_summary.csv", f"{stem}exit_vectors.csv", f"{stem}ternary_poses.csv"]
+    pd.DataFrame(rows).to_csv(out / names[0], index=False)
+    pd.concat(vecs, ignore_index=True).to_csv(out / names[1], index=False)
+    pd.concat(poses, ignore_index=True).to_csv(out / names[2], index=False)
     print(f"  pose PDB files in {out}/poses/ - open them in PyMOL to inspect")
-    return ["ternary_summary.csv", "exit_vectors.csv", "ternary_poses.csv", "poses/"]
+    return names + ["poses/"]
 
 
 def main():
@@ -268,9 +282,10 @@ def main():
     pd.DataFrame(pairs).to_csv(out / "top_pairs.csv", index=False)
     saved.append("top_pairs.csv")
     if args.structures:
+        e3_genes = structures.resolve_e3(args.e3) if args.e3 is not None else []
         want = list(dict.fromkeys(ranking.protein.head(args.struct_targets).tolist()
                                   + [p[k] for p in pairs for k in ("protein_a", "protein_b")]
-                                  + inputs))
+                                  + inputs + e3_genes))
         print(f"Looking up PDB structures for {len(want)} proteins...")
         sdf, accs, meta, per_gene = structures.collect(want, args.species,
                                                        args.refresh_structures)
@@ -290,8 +305,30 @@ def main():
             print(pdf[["protein_a", "protein_b", "ligand_pdb_a", "ligand_pdb_b",
                        "n_cocomplex", "cocomplex_pdbs", "both_have_ligand"]]
                   .to_string(index=False))
+            e3_df = None
+            if args.e3 is not None:
+                targets = [t for t in ranking.protein.head(args.e3_targets).tolist()]
+                combos = [(t, e) for t in targets for e in e3_genes if t != e]
+                e3_df = structures.e3_table(
+                    structures.pair_table(combos, accs, per_gene, meta), ranking)
+                e3_df.to_csv(out / "e3_pairs.csv", index=False)
+                saved.append("e3_pairs.csv")
+                print(f"\nPROTAC tractability: {len(targets)} top targets x "
+                      f"{len(e3_genes)} E3 ligases")
+                cols = ["target", "e3", "maturity", "target_ligand_pdb", "e3_ligand_pdb",
+                        "both_have_ligand", "n_cocomplex"]
+                print(e3_df.head(args.top)[cols].to_string(index=False))
+                missing = sorted(set(e3_genes) - set(e3_df[e3_df.e3_ligand_pdb != ""].e3))
+                if missing:
+                    print("  no ligand-bound structure found for: " + ", ".join(missing))
             if args.ternary:
                 saved += run_ternary(args, pdf, out)
+                if e3_df is not None:
+                    usable = e3_df[e3_df.both_have_ligand].head(args.e3_pairs)
+                    renamed = usable.rename(columns={
+                        "target": "protein_a", "e3": "protein_b",
+                        "target_ligand_pdb": "ligand_pdb_a", "e3_ligand_pdb": "ligand_pdb_b"})
+                    saved += run_ternary(args, renamed, out, label="target-E3", prefix="e3")
         else:
             print("  no structures found for these proteins")
 

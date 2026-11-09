@@ -72,6 +72,90 @@ def _request(method, url, **kw):
     raise last
 
 
+# E3 ligases (really: substrate receptors) with published small-molecule handles, for
+# --e3. Only the gene symbols are fixed here; the actual structures and ligands are looked
+# up live, so the table does not go stale as new entries appear.
+#   clinical    - degraders using this E3 have reached the clinic
+#   established - well-precedented in the literature
+#   emerging    - real chemical matter, little or no degrader precedent
+E3_LIGASES = {
+    "CRBN":   dict(name="Cereblon (CUL4-DDB1)", chemotype="IMiDs: thalidomide, "
+                   "lenalidomide, pomalidomide", maturity="clinical",
+                   note="most degraders to date; IMiD binding is species-specific "
+                        "(poor in mouse) and reshapes the surface, recruiting neosubstrates"),
+    "VHL":    dict(name="von Hippel-Lindau (CUL2)", chemotype="VH032 / VHL-based ligands",
+                   maturity="clinical",
+                   note="large, well-characterised ligands with a clear exit vector; "
+                        "VHL is broadly expressed"),
+    "MDM2":   dict(name="MDM2 / HDM2", chemotype="nutlins, idasanutlin",
+                   maturity="established",
+                   note="first PROTAC E3; degraders also stabilise p53, so the effect is "
+                        "rarely from degradation alone"),
+    "XIAP":   dict(name="X-linked inhibitor of apoptosis", chemotype="SMAC mimetics",
+                   maturity="established",
+                   note="IAP antagonists trigger IAP auto-degradation, which confounds "
+                        "readouts"),
+    "BIRC2":  dict(name="cIAP1", chemotype="SMAC mimetics, bestatin esters (SNIPERs)",
+                   maturity="established", note="same auto-degradation caveat as XIAP"),
+    "KEAP1":  dict(name="Kelch-like ECH-associated protein 1 (CUL3)",
+                   chemotype="non-covalent Kelch-domain binders", maturity="emerging",
+                   note="engaging KEAP1 also stabilises NRF2, an on-target side effect"),
+    "DCAF15": dict(name="DCAF15 (CUL4)", chemotype="aryl sulfonamides: indisulam, E7820",
+                   maturity="emerging",
+                   note="works as a molecular glue for RBM39 rather than through a "
+                        "conventional linker handle"),
+    "DCAF16": dict(name="DCAF16 (CUL4)", chemotype="covalent handles", maturity="emerging",
+                   note="covalent; few structures"),
+    "DCAF11": dict(name="DCAF11 (CUL4)", chemotype="covalent handles", maturity="emerging",
+                   note="covalent; very few structures"),
+    "DCAF1":  dict(name="DCAF1 / VPRBP (CUL4)", chemotype="non-covalent binders",
+                   maturity="emerging", note="newer, growing structural coverage"),
+    "FEM1B":  dict(name="FEM1B (CUL2)", chemotype="covalent fumarates", maturity="emerging",
+                   note="covalent, cysteine-dependent"),
+}
+
+# RNF114 (nimbolide) and RNF4 are used in the literature but have no ligand-bound human
+# structure in the PDB, so there is nothing for the geometry to work with; they are left out.
+
+DEFAULT_E3 = ("CRBN", "VHL", "MDM2", "XIAP", "BIRC2", "KEAP1")
+
+
+def resolve_e3(names=None):
+    """Which E3s to test: the default set, 'all', or the names given (unknown ones kept)."""
+    if not names:
+        return list(DEFAULT_E3)
+    if len(names) == 1 and names[0].lower() == "all":
+        return list(E3_LIGASES)
+    return list(dict.fromkeys(n.upper() for n in names))
+
+
+def e3_table(pair_df, ranking=None):
+    """pair_structures rows annotated with what is known about each E3."""
+    order = {"clinical": 0, "established": 1, "emerging": 2, "": 3}
+    rank = ({r.protein: i for i, r in enumerate(ranking.itertuples())}
+            if ranking is not None else {})
+    rows = []
+    for r in pair_df.itertuples():
+        info = E3_LIGASES.get(r.protein_b, {})
+        rows.append({"target": r.protein_a, "e3": r.protein_b,
+                     "e3_name": info.get("name", ""),
+                     "maturity": info.get("maturity", ""),
+                     "target_ligand_pdb": r.ligand_pdb_a, "target_ligands": r.ligands_a,
+                     "e3_ligand_pdb": r.ligand_pdb_b, "e3_ligands": r.ligands_b,
+                     "both_have_ligand": r.both_have_ligand,
+                     "n_cocomplex": r.n_cocomplex,
+                     "e3_chemotype": info.get("chemotype", ""),
+                     "caveat": info.get("note", "")})
+    df = pd.DataFrame(rows)
+    if len(df):
+        df["_t"] = df.target.map(lambda t: rank.get(t, 9999))
+        df["_m"] = df.maturity.map(lambda m: order.get(m, 3))
+        df = (df.sort_values(["both_have_ligand", "_t", "_m", "e3"],
+                             ascending=[False, True, True, True])
+                .drop(columns=["_t", "_m"]).reset_index(drop=True))
+    return df
+
+
 # ---------- tiny cached-JSON helper ----------
 
 def _cache_path(*parts):

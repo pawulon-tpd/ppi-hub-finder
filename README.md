@@ -67,6 +67,12 @@ python ppi_hubs.py -f examples/genes_example.txt --source both --exclude-hubs --
 # ... plus ligand burial, exit vectors and clash-free ternary poses (PROTAC triage)
 python ppi_hubs.py -f examples/genes_example.txt --source both --exclude-hubs --structures --ternary
 
+# Which of my targets is PROTAC-tractable, and with which E3 ligase?
+python ppi_hubs.py -f examples/genes_example.txt --source both --structures --e3 --ternary
+
+# ... against specific E3s only
+python ppi_hubs.py -f examples/genes_example.txt --source both --structures --e3 VHL CRBN --ternary
+
 # Mouse
 python ppi_hubs.py Trp53 Mdm2 Bax --species 10090
 ```
@@ -146,6 +152,9 @@ so compare runs with and without the flag.
 | `--structures` | Look up PDB entries and bound ligands for the top targets and the best pairs | off |
 | `--struct-targets` | How many top targets to look up | 10 |
 | `--pairs` | How many best target pairs to report (also printed without `--structures`) | 3 |
+| `--e3 [GENES]` | Also pair each top target with E3 ligases that have small-molecule handles. No names = the six default E3s; `all` = the whole built-in table; or name your own | off |
+| `--e3-targets` | How many top targets to test against the E3s | 5 |
+| `--e3-pairs` | With `--ternary`: how many target-E3 combinations get the full geometry scan | 6 |
 | `--ternary` | For each pair with a ligand on both sides: ligand burial, exit vectors, clash-free pose scan | off |
 | `--ternary-vectors` | Exit vectors per ligand to try | 3 |
 | `--ternary-poses` | Distinct arrangements written as PDB files per pair | 5 |
@@ -182,6 +191,8 @@ so compare runs with and without the flag.
 | `structures.csv` | Per protein: number of PDB entries, how many have a real ligand, best resolution, best ligand-bound entry, distinct ligands |
 | `ligands.csv` | Every non-additive ligand found, with its PDB entry, chain, weight, resolution and name |
 | `pair_structures.csv` | Per pair: the best ligand-bound entry on each side, and any entry containing **both** proteins |
+| `e3_pairs.csv` | `--e3`: each top target x each E3, with both sides' best ligand-bound structure, whether a co-complex exists, the E3's chemotype and its caveats |
+| `e3_ternary_summary.csv`, `e3_exit_vectors.csv`, `e3_ternary_poses.csv` | `--e3 --ternary`: the same geometry files for target-E3 pairs (pose files are `poses/pose_e3_<target>_<E3>_<n>.pdb`) |
 | `ternary_summary.csv` | Per pair: ligand burial on each side, best attachment atoms and linker length, % of poses that are clash-free, number of distinct arrangements, warnings |
 | `exit_vectors.csv` | Candidate linker attachment atoms: relative solvent exposure, SASA, how blocked the outward cone is, coordinates |
 | `ternary_poses.csv` | The scanned poses (top 200 per pair) with linker length, tilt, spin, clashes and contacts |
@@ -282,6 +293,36 @@ span, 5–20 Å), the tilt of the A→B direction away from A's exit vector (0/2
 azimuth of that tilt, and B's spin about the axis. Each pose is scored by heavy-atom
 clashes (< 2.5 Å) and interface contacts (< 4.5 Å). Thousands of near-identical poses are
 then clustered so you get a handful of genuinely different arrangements.
+
+### E3 ligase mode (`--e3`)
+
+Instead of only asking "which two of my proteins pair up", this asks **"which of my targets
+could be degraded, and by which E3 ligase"**. Each top target is paired with E3 ligases that
+have published small-molecule handles, and the same structural machinery runs on those pairs.
+
+Only the gene symbols are hard-coded; the structures and ligands are looked up live, so the
+table does not go stale. Defaults are `CRBN VHL MDM2 XIAP BIRC2 KEAP1`.
+
+| E3 | Handle | Maturity |
+|---|---|---|
+| CRBN | IMiDs (thalidomide, lenalidomide, pomalidomide) | clinical |
+| VHL | VH032-type ligands | clinical |
+| MDM2 | nutlins | established |
+| XIAP, BIRC2 (cIAP1) | SMAC mimetics, SNIPERs | established |
+| KEAP1 | Kelch-domain binders | emerging |
+| DCAF15, DCAF16, DCAF11, DCAF1, FEM1B | sulfonamides, covalent handles | emerging |
+
+`e3_pairs.csv` carries a `caveat` column per E3, because several have on-target
+complications that are easy to forget: IMiD binding to CRBN is poor in mouse and recruits
+neosubstrates, IAP antagonists cause IAP auto-degradation, MDM2 binders stabilise p53, and
+KEAP1 binders stabilise NRF2. RNF114 and RNF4 are used in the literature but have no
+ligand-bound human structure in the PDB, so there is nothing for the geometry to work on
+and they are left out.
+
+Rows are ordered by whether both sides have a ligand, then the target's rank in your
+network, then how well-precedented the E3 is. **Being listed is not a prediction** — it
+means a chemical starting point exists on both sides, which is where the ternary caveats
+below start to apply.
 
 ### How much to trust the ternary scan
 

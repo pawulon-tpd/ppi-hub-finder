@@ -229,3 +229,48 @@ def test_pick_ligand_skips_additives():
     assert G.pick_ligand(model)["resname"] == "LIG"
     with pytest.raises(ValueError):
         G.pick_ligand(model, ligand_id="NOPE")
+
+
+# ---------- E3 ligase mode ----------
+
+def test_resolve_e3():
+    assert S.resolve_e3() == list(S.DEFAULT_E3)
+    assert set(S.resolve_e3(["all"])) == set(S.E3_LIGASES)
+    assert S.resolve_e3(["vhl", "crbn", "vhl"]) == ["VHL", "CRBN"]      # upper-cased, deduped
+    assert S.resolve_e3(["MADE_UP"]) == ["MADE_UP"]                     # unknown names kept
+    assert set(S.DEFAULT_E3) <= set(S.E3_LIGASES)
+    for gene, info in S.E3_LIGASES.items():
+        assert info["maturity"] in ("clinical", "established", "emerging"), gene
+        assert info["name"] and info["chemotype"] and info["note"], gene
+
+
+def test_e3_table_orders_by_ligand_then_target_then_maturity():
+    import pandas as pd
+    pair_df = pd.DataFrame([
+        # target, e3, ligand pdbs, both_have_ligand
+        ("KIN2", "VHL", "1AAA", "2VHL", True, 0),
+        ("KIN1", "KEAP1", "1BBB", "2KEA", True, 0),     # emerging E3, better target
+        ("KIN1", "CRBN", "1BBB", "2CRB", True, 1),      # clinical E3, better target
+        ("KIN1", "XIAP", "1BBB", "", False, 0),         # no E3 ligand: last
+    ], columns=["protein_a", "protein_b", "ligand_pdb_a", "ligand_pdb_b",
+                "both_have_ligand", "n_cocomplex"])
+    pair_df["ligands_a"] = ""
+    pair_df["ligands_b"] = ""
+    ranking = pd.DataFrame({"protein": ["KIN1", "KIN2"]})       # KIN1 ranks higher
+    out = S.e3_table(pair_df, ranking)
+    assert list(zip(out.target, out.e3)) == [("KIN1", "CRBN"), ("KIN1", "KEAP1"),
+                                             ("KIN2", "VHL"), ("KIN1", "XIAP")]
+    assert out.iloc[0].maturity == "clinical" and out.iloc[0].n_cocomplex == 1
+    assert "IMiD" in out.iloc[0].e3_chemotype and out.iloc[0].caveat
+    assert out.iloc[-1].e3_name == S.E3_LIGASES["XIAP"]["name"]
+
+
+def test_e3_table_without_ranking_still_works():
+    import pandas as pd
+    pair_df = pd.DataFrame([("T", "VHL", "1A", "2B", True, 0)],
+                           columns=["protein_a", "protein_b", "ligand_pdb_a",
+                                    "ligand_pdb_b", "both_have_ligand", "n_cocomplex"])
+    pair_df["ligands_a"] = pair_df["ligands_b"] = ""
+    out = S.e3_table(pair_df)
+    assert len(out) == 1 and out.iloc[0].e3 == "VHL" and out.iloc[0].maturity == "clinical"
+    assert S.e3_table(pair_df.iloc[0:0]).empty          # no pairs: empty, no crash

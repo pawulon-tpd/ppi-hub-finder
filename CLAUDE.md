@@ -103,9 +103,12 @@ resources do not count. Keeps ~92% of mechanisms on the 24-gene example.
 
 ## Open questions
 - Real-world target lists not tested yet (only the 14-gene example).
-- No E3-ligase mode yet: `--structures` ranks whatever is in the list. A built-in E3 table
-  (VHL, CRBN, MDM2, XIAP, DCAF15...) with known ligand-bound PDBs would answer "which of my
-  proteins is PROTAC-tractable, and with which E3" - Pawel raised this, not yet decided.
+- `--e3` done (2026-11-09): `structures.E3_LIGASES` holds 11 substrate receptors with
+  chemotype/maturity/caveat; only gene symbols are fixed, structures looked up live.
+  `e3_table` sorts by both-have-ligand, target rank, then maturity. CLI pairs the top
+  `--e3-targets` with them and runs the geometry on `--e3-pairs` of them, writing
+  `e3_*` output files and `poses/pose_e3_*`. RNF114/RNF4 excluded: no ligand-bound
+  human structure in the PDB (verified).
 - First `--structures` run on ~20 proteins fetches ~2000 PDB entries (~6 min); cached after.
 - BioGRID used to time out above ~10 proteins: partner pulls now go out in chunks of 10,
   within-shell pulls in chunks of 150 PLUS every chunk pair (else cross-chunk pairs are

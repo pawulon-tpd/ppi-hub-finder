@@ -101,6 +101,13 @@ resources do not count. Keeps ~92% of mechanisms on the 24-gene example.
   `python -c` / heredoc cannot re-import __main__).
 - `--omnipath-license` now defaults to commercial.
 
+## Presentation material
+`docs/PRESENTATION_HANDOFF.md` (pipeline explainer + slide plan, written 2026-11-09) and
+`docs/make_figures.py` -> pipeline.png, ternary_scan.png, benchmark_5t35.png. Figure
+colours come from a CVD-validated palette (#2a78d6 / #eb6834 / #1baf7a); everything is
+directly labelled, so nothing relies on colour alone. Keep the benchmark figure honest if
+the scoring ever improves - regenerate it from the real numbers, do not edit the PNG.
+
 ## Open questions
 - Real-world target lists not tested yet (only the 14-gene example).
 - `--e3` done (2026-11-09): `structures.E3_LIGASES` holds 11 substrate receptors with

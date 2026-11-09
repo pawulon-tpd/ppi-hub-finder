@@ -391,6 +391,18 @@ Pass `--omnipath-license academic` to use everything. Two warnings:
   resources are hard to attribute. For commercial work, check the licences of the
   resources you actually rely on — `mechanisms.csv` lists them per record.
 
+## Presentation material
+
+`docs/PRESENTATION_HANDOFF.md` explains the pipeline stage by stage, with the numbers,
+caveats and a suggested slide order for building a deck. The figures beside it are
+regenerated with `python docs/make_figures.py`:
+
+| File | Content |
+|---|---|
+| `docs/pipeline.png` | The whole pipeline: data sources, stages, output files |
+| `docs/ternary_scan.png` | How the ternary pose scan is parameterised |
+| `docs/benchmark_5t35.png` | The 5T35 validation result |
+
 ## Tests
 
 ```bash
